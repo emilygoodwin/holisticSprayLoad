@@ -19,3 +19,7 @@ analysis: R files for the main analyses, visualizations, and data processing
 models: RSA model 
 
 For stimuli and data files, please email goodwine@stanford.edu.
+
+
+## Acknowledgements
+The norming experiment relies on an excellent custom plugin from [Mateusz Wozniak](https://github.com/mmwozniak/plugin-html-slider-response-nostart) to present participnats with a response slider that does not automatically start at a particular value. 
