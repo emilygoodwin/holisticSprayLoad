@@ -1,0 +1,23 @@
+factors:
+    - name: playerCount
+      desc: playerCount determines the number of Players are in a Game.
+      values:
+        - value: 1
+        - value: 2
+        - value: 3
+        - value: 5
+        - value: 8
+        - value: 13
+    - name: templateID
+      values:
+        - value: 65591de4c75a69c5f81034f4
+    - name: managementToken
+      values:
+        - value: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpYXQiOjE3MDY4MjI5MTgsImV4cCI6MTcwNjkwOTMxOCwianRpIjoiand0X25vbmNlIiwidHlwZSI6Im1hbmFnZW1lbnQiLCJ2ZXJzaW9uIjoyLCJuYmYiOjE3MDY4MjI5MTgsImFjY2Vzc19rZXkiOiI2NTU5MTc2ODY4MTExZjZmZTRiNTdlNTcifQ.G2St9oKuBFrLbakGPbgw2gkwBwp9cxgqEF8tzlMmOlA
+treatments:
+    - name: Two Players
+      desc: Two-player Game
+      factors:
+        managementToken: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpYXQiOjE3MDY4MjI5MTgsImV4cCI6MTcwNjkwOTMxOCwianRpIjoiand0X25vbmNlIiwidHlwZSI6Im1hbmFnZW1lbnQiLCJ2ZXJzaW9uIjoyLCJuYmYiOjE3MDY4MjI5MTgsImFjY2Vzc19rZXkiOiI2NTU5MTc2ODY4MTExZjZmZTRiNTdlNTcifQ.G2St9oKuBFrLbakGPbgw2gkwBwp9cxgqEF8tzlMmOlA
+        playerCount: 2
+        templateID: 65591de4c75a69c5f81034f4

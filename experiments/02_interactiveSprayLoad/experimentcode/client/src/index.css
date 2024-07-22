@@ -1,0 +1,37 @@
+@layer utilities {
+  /* Chrome, Safari, Edge, Opera */
+  input.number-arrows-none::-webkit-outer-spin-button,
+  input.number-arrows-none::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  
+  /* Firefox */
+  input.number-arrows-none[type="number"] {
+    -moz-appearance: textfield;
+  }
+}
+
+
+.img-hor {
+  -moz-transform: scaleX(-1);
+  -o-transform: scaleX(-1);
+  -webkit-transform: scaleX(-1);
+  transform: scaleX(-1);
+  filter: FlipH;
+  -ms-filter: "FlipH";
+}
+
+.topCenter {
+  position: fixed;
+  top: 20%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.bottomCenter {
+  position: fixed;
+  top: 80%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}

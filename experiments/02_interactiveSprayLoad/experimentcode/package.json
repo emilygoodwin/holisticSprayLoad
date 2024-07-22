@@ -1,0 +1,27 @@
+{
+  "name": "spoken-prod",
+  "version": "1.0.0",
+  "description": "spoken production in empirica",
+  "main": "index.js",
+  "dependencies": {
+    "axios": "^1.4.0",
+    "csvtojson": "^2.0.10",
+    "ws": "^8.13.0"
+  },
+  "scripts": {
+    "test": "empirica"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/neilrathi/spoken-prod.git"
+  },
+  "keywords": [
+    "empirica"
+  ],
+  "author": "Neil Rathi",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/neilrathi/spoken-prod/issues"
+  },
+  "homepage": "https://github.com/neilrathi/spoken-prod#readme"
+}

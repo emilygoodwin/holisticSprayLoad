@@ -1,0 +1,48 @@
+// There are 8 trials with "spray/drench" scenes, 
+// 8 trials with "stuff/put" scenes, 8 scenes using
+// "load/stash", 2 scenes using "show" etc. 
+
+import { ListExportsCommand } from "@aws-sdk/client-dynamodb"
+
+export let verb_arr = ['spray', 'stuff', 'load', 'spread', 
+        'spray', 'stuff', 'load', 'spread', 
+        'spray', 'stuff', 'load', 'spread',
+        'spray', 'stuff', 'load', 'spread',
+        'spray', 'stuff', 'load', 'spread',
+        'spray', 'stuff', 'load', 'spread',
+        'spray', 'stuff', 'load', 'spread',
+        'spray', 'stuff', 'load', 'spread',
+        'show', 'bring','show', 'bring']
+
+
+export let spray_scenes = [{"substance": "paint", "location": "fence"}, {"substance": "poison", "location": "bush"}, {"substance": "soap", "location": "table"}, {"substance": "water", "location": "car"}]
+export let spread_scenes = [{"substance": "honey", "location": "pastry"}, {"substance": "frosting", "location": "cupcake"}, {"substance": "butter", "location": "toast"}, {"substance": "ketchup", "location": "hotdog"}]
+export let load_scenes =  [{"substance": "fruit", "location": "plane"}, {"substance": "hay", "location": "wagon"}, {"substance": "trash", "location": "train"}, {"substance": "wood", "location": "truck"}]
+export let stuff_scenes =  [{"substance": "cash", "location": "envelope"}, {"substance": "paper", "location": "shoe"}, {"substance": "rice", "location": "bellpepper"}, {"substance": "cheese", "location": "mushrooms"}]
+export let show_scenes =  [{"substance": "dog", "location": "cat"}, {"substance": "goose", "location": "turkey"}]
+export let bring_scenes =  [{"substance": "children", "location": "parents"}, {"substance": "doctor", "location": "patient"}]
+
+export let distractor_noun_inventory = {
+    "spray" : {"locations": ["fence","bush","table","car",], "substances": ["paint", "poison", "soap", "water"]},
+    "drench" : {"locations": ["fence","bush","table","car",], "substances": ["paint", "poison", "soap", "water"]},
+    "spread" : {"locations": ["pastry","cupcake","toast","hotdog",], "substances": ["honey", "frosting", "butter", "ketchup"]},
+    "cover" : {"locations": ["pastry","cupcake","toast","hotdog",], "substances": ["honey", "frosting", "butter", "ketchup"]},
+    "load" : {"locations": ["plane","wagon","train","truck",], "substances": ["fruit", "hay", "trash", "wood"]},
+    "stash" : {"locations": ["plane","wagon","train","truck",], "substances": ["fruit", "hay", "trash", "wood"]},
+    "stuff": {"locations": ["envelope","shoe","bellpepper","mushrooms",], "substances": ["cash", "paper", "rice", "cheese"]},
+    "put": {"locations": ["envelope","shoe","bellpepper","mushrooms",], "substances": ["cash", "paper", "rice", "cheese"]},
+    "show": {"locations": ["cat","turkey","sheep"], "substances": ["dog", "goose", "pig"]}, 
+    "bring": {"locations": ["parents","patient", "fireman"], "substances": ["children", "doctor", "teacher"]},
+    "coat": {"locations": ["pizza", "sandwich", "chicken"], "substances": ["gravy", "jam", "lemonade"]},
+    "spill": {"locations": ["shirt", "books", "newspaper"], "substances": ["wine", "beer", "coffee"]}
+}
+
+export let train_nouns = [
+    {label: "bush", type: "count", verb: "spray", thetaRole: "location"}, {label: "poison", type: "mass", verb: "spray", thetaRole:"substance"}, {label: "car", type: "count", verb: "spray", thetaRole:"location"}, {label: "water", type: "mass", verb: "spray", thetaRole:"substance"}, {label: "fence", type: "count", verb: "spray", thetaRole:"location"}, {label: "paint", type: "mass", verb: "spray", thetaRole:"substance"}, {label: "table", type: "count", verb: "spray", thetaRole:"location"}, {label: "soap", type: "mass", verb: "spray", thetaRole:"substance"}, {label: "mushrooms", type: "plural", verb: "stuff", thetaRole:"location"}, {label: "cheese", type: "mass", verb: "stuff", thetaRole:"substance"}, {label: "bellpepper", type: "count", verb: "stuff", thetaRole:"location"}, {label: "rice", type: "mass", verb: "stuff", thetaRole:"substance"}, {label: "envelope", type: "count", verb: "stuff", thetaRole:"location"}, {label: "cash", type: "mass", verb: "stuff", thetaRole:"substance"}, {label: "shoe", type: "count", verb: "stuff", thetaRole:"location"}, {label: "paper", type: "mass", verb: "stuff", thetaRole:"substance"}, {label: "plane", type: "count", verb: "load", thetaRole:"location"}, {label: "fruit", type: "mass", verb: "load", thetaRole:"substance"}, {label: "wagon", type: "count", verb: "load", thetaRole:"location"}, {label: "hay", type: "mass", verb: "load", thetaRole:"substance"}, {label: "truck", type: "count", verb: "load", thetaRole:"location"}, {label: "wood", type: "mass", verb: "load", thetaRole:"substance"}, {label: "train", type: "count", verb: "load", thetaRole:"location"}, {label: "trash", type: "mass", verb: "load", thetaRole:"substance"}, {label: "pastry", type: "count", verb: "spread", thetaRole:"location"}, {label: "butter", type: "mass", verb: "spread", thetaRole:"substance"}, {label: "cupcake", type: "count", verb: "spread", thetaRole:"location"}, {label: "frosting", type: "mass", verb: "spread", thetaRole:"substance"}, {label: "hotdog", type: "count", verb: "spread", thetaRole:"location"}, {label: "ketchup", type: "mass", verb: "spread", thetaRole:"substance"}, {label: "toast", type: "mass", verb: "spread", thetaRole:"location"}, {label: "honey", type: "mass", verb: "spread", thetaRole:"substance"}, {label: "dog", type: "count", verb: "show", thetaRole:"substance"}, {label: "cat", type: "count", verb: "show", thetaRole:"location"}, {label: "goose", type: "count", verb: "show", thetaRole:"substance"}, {label: "turkey", type: "count", verb: "show", thetaRole:"location"}, {label: "children", type: "plural", verb: "bring", thetaRole:"substance"}, {label: "parents", type: "plural", verb: "bring", thetaRole:"location"}, {label: "doctor", type: "count", verb: "bring", thetaRole:"substance"}, {label: "patient", type: "count", verb: "bring", thetaRole:"location"}, {label: "wine", type: "mass", verb: "spill", thetaRole:"substance"}, {label: "gravy", type: "mass", verb: "coat", thetaRole:"substance"}, {label: "chicken", type: "count", verb: "coat", thetaRole:"location"}, {label: "shirt", type: "plural", verb: "spill", thetaRole:"location"}
+    // {label: "bush", type: "count", verb: "spray", thetaRole:"location"}
+]
+
+export let recall_nouns = [
+    {label: "bush", type: "count", verb: "spray", thetaRole: "location"}, {label: "poison", type: "mass", verb: "spray", thetaRole:"substance"}, {label: "car", type: "count", verb: "spray", thetaRole:"location"}, {label: "water", type: "mass", verb: "spray", thetaRole:"substance"}, {label: "fence", type: "count", verb: "spray", thetaRole:"location"}, {label: "paint", type: "mass", verb: "spray", thetaRole:"substance"}, {label: "table", type: "count", verb: "spray", thetaRole:"location"}, {label: "soap", type: "mass", verb: "spray", thetaRole:"substance"}, {label: "mushrooms", type: "plural", verb: "stuff", thetaRole:"location"}, {label: "cheese", type: "mass", verb: "stuff", thetaRole:"substance"}, {label: "bellpepper", type: "count", verb: "stuff", thetaRole:"location"}, {label: "rice", type: "mass", verb: "stuff", thetaRole:"substance"}, {label: "envelope", type: "count", verb: "stuff", thetaRole:"location"}, {label: "cash", type: "mass", verb: "stuff", thetaRole:"substance"}, {label: "shoe", type: "count", verb: "stuff", thetaRole:"location"}, {label: "paper", type: "mass", verb: "stuff", thetaRole:"substance"}, {label: "plane", type: "count", verb: "load", thetaRole:"location"}, {label: "fruit", type: "mass", verb: "load", thetaRole:"substance"}, {label: "wagon", type: "count", verb: "load", thetaRole:"location"}, {label: "hay", type: "mass", verb: "load", thetaRole:"substance"}, {label: "truck", type: "count", verb: "load", thetaRole:"location"}, {label: "wood", type: "mass", verb: "load", thetaRole:"substance"}, {label: "train", type: "count", verb: "load", thetaRole:"location"}, {label: "trash", type: "mass", verb: "load", thetaRole:"substance"}, {label: "pastry", type: "count", verb: "spread", thetaRole:"location"}, {label: "butter", type: "mass", verb: "spread", thetaRole:"substance"}, {label: "cupcake", type: "count", verb: "spread", thetaRole:"location"}, {label: "frosting", type: "mass", verb: "spread", thetaRole:"substance"}, {label: "hotdog", type: "count", verb: "spread", thetaRole:"location"}, {label: "ketchup", type: "mass", verb: "spread", thetaRole:"substance"}, {label: "toast", type: "mass", verb: "spread", thetaRole:"location"}, {label: "honey", type: "mass", verb: "spread", thetaRole:"substance"}, {label: "dog", type: "count", verb: "show", thetaRole:"substance"}, {label: "cat", type: "count", verb: "show", thetaRole:"location"}, {label: "goose", type: "count", verb: "show", thetaRole:"substance"}, {label: "turkey", type: "count", verb: "show", thetaRole:"location"}, {label: "children", type: "plural", verb: "bring", thetaRole:"substance"}, {label: "parents", type: "plural", verb: "bring", thetaRole:"location"}, {label: "doctor", type: "count", verb: "bring", thetaRole:"substance"}, {label: "patient", type: "count", verb: "bring", thetaRole:"location"}, {label: "wine", type: "mass", verb: "spill", thetaRole:"substance"}, {label: "gravy", type: "mass", verb: "coat", thetaRole:"substance"}, {label: "chicken", type: "count", verb: "coat", thetaRole:"location"}, {label: "shirt", type: "plural", verb: "spill", thetaRole:"location"}
+    // {label: "bush", type: "count", verb: "spray", thetaRole:"location"}, {label: "poison", type: "mass", verb: "spray", thetaRole:"substance"}, {label: "car", type: "count", verb: "spray", thetaRole:"location"}
+]

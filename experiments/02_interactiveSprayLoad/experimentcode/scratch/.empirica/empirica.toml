@@ -1,0 +1,9 @@
+name = "spoken-prod"
+
+[tajriba.auth]
+srtoken = "VhibHwVkorwGgPdJ"
+
+[[tajriba.auth.users]]
+name = "Admin"
+username = "admin"
+password = "iYYSdXLP"
