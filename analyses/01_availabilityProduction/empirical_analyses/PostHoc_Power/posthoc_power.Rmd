@@ -1,0 +1,290 @@
+---
+title: "PostHoc Power Analysis for Non Interactive Production Experiment"
+output: pdf_document
+date: "2024-03-13"
+---
+
+```{r setup, echo=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Colorblind Palette from Judith's class
+palette= c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2")
+options(ggplot2.continuous.color = palette)
+options(ggplot2.continuous.fill = palette)
+options(ggplot2.discrete.fill = palette)
+library(tidyverse)
+library(emmeans)
+library(lme4)
+library(simr)
+library(bootstrap)
+library(binom)
+library(ggtext)
+library(ggplot2)
+
+
+## Code for bootstrapping 95% confidence intervals
+## Copied from Judith Degen's 245 b repo, helpers.R file
+library(bootstrap)
+theta <- function(x,xdata,na.rm=T) {mean(xdata[x],na.rm=na.rm)}
+ci.low <- function(x,na.rm=T) {
+  mean(x,na.rm=na.rm) - quantile(bootstrap(1:length(x),1000,theta,x,na.rm=na.rm)$thetastar,.025,na.rm=na.rm)}
+ci.high <- function(x,na.rm=T) {
+  quantile(bootstrap(1:length(x),1000,theta,x,na.rm=na.rm)$thetastar,.975,na.rm=na.rm) - mean(x,na.rm=na.rm)}
+```
+
+# Load Data
+
+```{r echo = FALSE, warning = FALSE, message=FALSE}
+# Step 1: Get Transcription Data
+df.raw_transcriptions <- read_csv("../All_Transcriptions_HandEdited.csv") %>%
+  filter(participant_audio_id != '6203f830-9f85-45f1-aa3f-f961b6ad4b94') %>% #No Audio
+  filter(participant_audio_id != 'bd0ad0a8-5802-4bc1-afda-2451c0ea7955') %>% #No Audio
+  filter(participant_audio_id != 'e7458f96-ff66-4873-8220-595ccd61e540') %>% #Self Report NNS
+  filter(participant_audio_id != 'e89a3ce0-bb45-4cdd-8333-c0335d1f5a94') %>% #Self Report NNS
+  filter(participant_audio_id != '4f40a7e3-2764-46bf-8a5f-3e8682eff108') #Unsure NNS
+
+df.transcriptions <- df.raw_transcriptions %>% 
+  filter(verb_type == 'critical' &
+         !is.na(first_noun_hand) &
+         first_noun_hand != 'DROP' &
+         first_noun_hand != 'sub*') %>%
+  mutate(first_noun_factor = recode(first_noun_hand, 'loc' = 1, 'sub' = 0),
+         foregrounded = fct(foregrounded, levels = c("sub", "loc")),
+         first_noun = fct(first_noun_hand, levels = c("sub","loc")),
+         mirroringCondition = as.integer(as.logical(mirroring_condition))) %>% 
+  select(-time_elapsed, -first_noun_hand, -`Hand Checked Accent`) %>% 
+  mutate(verb = recode(verb, "spray" = "Spray", "load" = "Load", 
+                       "spread" = "Spread", "stuff" = "Stuff" )) %>% 
+  mutate(verb = factor(verb, levels = c("Spread", "Load", "Spray", "Stuff")))
+
+# Step 2: Get a suprisal for each utterance
+raw_surprisals <- read_csv("../../../../data/02_availabilityInProduction/surprisals.csv") 
+
+df.surprisal <- left_join(df.transcriptions, 
+                          raw_surprisals, 
+                          by = join_by(participant_audio_id, trial_index))
+  
+# Calculate the mean surprisal for location-first and substance-first 
+# form of each each item (verb, noun, noun combination). 
+# There is no location-first "put" surprisal value: since location-first is just
+# a different event construal, they were thrown away during coding. 
+by_item_surprisal_value <- df.surprisal %>% 
+  group_by(verb, scene, first_noun) %>%
+  summarize(mean_surp = mean(surprisal)) 
+
+# Get ratio of sub over loc surprisal
+by_item_surprisal_ratio <- by_item_surprisal_value %>%
+  pivot_wider(values_from = mean_surp, 
+              names_from = first_noun, 
+              values_fill = 2) %>% 
+  mutate(surprisal_ratio = sub/loc ) %>% 
+  select(verb, scene, surprisal_ratio) 
+
+# Stitch surprisals together with transcriptions 
+df.trial_data <- left_join(df.transcriptions, 
+                           by_item_surprisal_value, 
+                           by = join_by(scene, verb, first_noun))
+df.trial_data <- left_join(df.trial_data, 
+                           by_item_surprisal_ratio, 
+                           by = join_by(scene, verb))
+
+
+# Step 3: Add Norming Data 
+df.norming  <- read_csv("../../../../data/02_normingAvailabilityStims/normingAvailabilityStims-trials.csv") %>% 
+  mutate(foregrounded = fct(foregrounded)) %>% 
+  mutate(scene = recode(scene, 'cheesemushroom' = 'cheesemushrooms')) %>%
+  select(verb, scene, foregrounded, mirroringCondition, response) %>% 
+  group_by(scene, foregrounded, mirroringCondition) %>% 
+  summarize(affectedness = mean(response))
+
+df.trial_data <- left_join(df.trial_data, df.norming)
+
+# Step 4: Center predictors
+df.model_data <- df.trial_data %>%
+  mutate(c_foregrounded = as.numeric(foregrounded)-mean(as.numeric(foregrounded))) %>%
+  mutate(c_affectedness = affectedness-mean(affectedness)) %>% 
+  mutate(c_mirroring = mirroringCondition-mean(mirroringCondition)) %>%
+  mutate(c_surprisalRatio = surprisal_ratio-mean(surprisal_ratio))
+
+df.model_data %>% glimpse()
+contrasts(df.model_data$foregrounded)
+contrasts(df.model_data$first_noun)
+```
+
+# Plot Fixed Effects
+
+## Foregrounding
+> Remake plot from paper in the same colourway, for consistency  
+
+```{r echo = FALSE}
+agr.foregrounding <- df.trial_data %>% 
+  group_by(foregrounded, verb) %>%
+  summarize(mean = mean(first_noun_factor), 
+            low = ci.low(first_noun_factor), 
+            high = ci.high(first_noun_factor)) %>%
+  mutate(ciHigh = mean + high, ciLow = mean - low) 
+
+agr.foregrounding %>% 
+  select(verb, foregrounded, mean, ciHigh, ciLow) %>% 
+  arrange(verb)
+
+
+agr.foregrounding %>%
+  ggplot(aes(x = foregrounded, y = mean, fill = verb)) +
+  geom_bar(stat = 'identity', color = "black", width= .75) +
+  geom_errorbar(aes(ymax = ciHigh, ymin = ciLow), width =.1) + 
+  facet_grid(~verb) + 
+  labs(x = "Foregrounded Item", 
+       y = "Proportion") +
+  scale_x_discrete(labels= c("Loc", "Sub")) + 
+  guides(fill = "none")
+
+```
+
+
+## surprisal
+```{r echo = FALSE}
+agr.item_surp <- df.trial_data %>%
+  group_by(verb, scene, verb_type) %>%
+  summarize(`Mean Item Surprisal Ratio` =
+              min(mean_surp), # Means already calculated in df.trial_data
+            `Proportion Loc-First Productions` = sum(first_noun == 'loc')/n())
+
+
+
+agr.item_surp %>%
+  filter(verb_type  == 'critical') %>%
+  ggplot(aes(x = `Mean Item Surprisal Ratio`, 
+             y = `Proportion Loc-First Productions`,
+             color = verb, fill = verb), 
+         alpha = .3) +
+  geom_jitter() +
+  geom_smooth(method= 'lm') +
+  facet_wrap(~verb, scales = "free")
+```
+
+```{r echo = FALSE}
+agr.image_affectedness <- df.trial_data %>% 
+  group_by(verb, scene, foregrounded, mirroringCondition, verb_type) %>% 
+  summarize(affectedness = mean(affectedness), #already a mean for that item
+            `Proportion Loc-First Productions` = sum(first_noun == 'loc')/n())
+
+agr.image_affectedness %>% 
+  filter(verb_type  == 'critical') %>% 
+  ggplot(aes(x = affectedness, 
+             y = `Proportion Loc-First Productions`,
+             color = verb, fill = verb), alpha = .3) + 
+  geom_point() + 
+  geom_smooth(method= 'lm') +
+  facet_wrap(~verb, scales = "free")
+```
+
+```{r echo = FALSE}
+agr.image_mirroring <- df.trial_data %>% 
+  mutate(mirroringCondition =as_factor(mirroringCondition)) %>% 
+  group_by(verb, mirroringCondition, verb_type) %>% 
+  summarize(`Proportion Loc-First Productions` = sum(first_noun == 'loc')/n())
+
+agr.image_affectedness %>% 
+  filter(verb_type  == 'critical') %>% 
+  ggplot(aes(x = mirroringCondition, 
+             y = `Proportion Loc-First Productions`, 
+             fill = verb), alpha = .3) + 
+  stat_summary(fun = "mean",
+               geom = "bar") +
+  stat_summary(fun.data = "mean_cl_boot",
+               geom = "linerange") +
+  facet_wrap(~verb, scales = "free")
+```
+
+# Fit Model
+> A reasonable model that converges. I walked down from many maximal models that
+didn't converge but not as methodically as one could: you possibly could get a 
+more complicated random effect structure to converge with more iterations.
+
+> No significant effect of surprisal. 
+> Locaion-first forms are significantly more likely with foregrounded locations 
+and a very slight additional boost for location foregrounded + unit increase in
+affectedness norm. 
+
+> Surprisal is insignificant but at least this time (as opposed to interactive)
+the effect is numerically in the right direction: Higher ratios are associated
+> with more loc-first forms (higher ratio = sub-first has a higher surprisal). 
+
+```{r}
+
+fit.smallest = glmer(first_noun ~ c_foregrounded*c_affectedness + c_mirroring + 
+                       c_surprisalRatio + 
+                       (1 | participant_audio_id)+  
+                       (1 | scene), 
+                     data = df.model_data, 
+                     family = "binomial")
+
+summary(fit.smallest)
+
+# Verbs allowed to have diff loc-first baseline proportions 
+# and other fixed fixed effects differ by verb
+fit.smallest = glmer(first_noun ~ verb + verb:(c_foregrounded*c_affectedness + c_mirroring + 
+                       c_surprisalRatio) +
+                       (1 | participant_audio_id)+  
+                       (1 | scene), 
+                     data = df.model_data, 
+                     family = "binomial")
+
+summary(fit.smallest)
+```
+
+
+
+### Power Analysis 
+
+```{r eval = FALSE}
+
+model <- fit.smallest
+
+# extract fixed effect names
+f.effects <- row.names(summary(model)$coefficients)[-1] # remove Intercept
+
+# First, check that we can caluclate a z test for each fixed effect
+for (f in f.effects){
+  p <- doTest(model,fixed(f,"z"))
+  print(p)
+}
+
+
+# Next Run powerSim on all fixed effects
+# this loop gets power level and confidence interval for observed effect
+# and stores results in data.frame powerSim.results
+powerSim.results <- data.frame()
+# 100 sims takes in on 2015 Macbook Pro (~2 min for each fixed effects)
+n_sim <- 100
+
+for (f in f.effects){
+  res <- powerSim(model,fixed(f,"z"), nsim=n_sim)
+  # calculate power as n. simulations where p-value < alpha
+  # powersim default alpha is .05
+  power <- sum(res$pval < res$alpha) / res$n
+  # calculate confidence intervals same way as print out of powerSim does
+  # formula here: https://github.com/pitakakariki/simr/blob/master/R/print.R
+  cis <- as.matrix(binom.confint(sum(res$pval < res$alpha),
+                            res$n,conf.level=0.95,
+                            methods=getSimrOption("binom"),
+                            alpha=res$alpha)[c("lower","upper")])
+  # get effect size
+  eff <- model@beta[which(f.effects == f)+1]
+  # add results to powerSim.results
+  powerSim.results <- rbind(
+    powerSim.results,
+    c(f,eff,power,cis[[1]],cis[[2]]))
+}
+colnames(powerSim.results) <- c("EFFECT","SIZE","POWER","LOWER95","UPPER95")
+powerSim.results
+# save(powerSim.results, file = "02_availabilityInProduction_PowerSim-results.Rda")
+```
+
+> We have 80% power for the foregrounding
+
+```{r}
+load("02_availabilityInProduction_PowerSim-results.Rda")
+colnames(powerSim.results) <- c("EFFECT","SIZE","POWER","LOWER95","UPPER95")
+powerSim.results
+```

@@ -1,0 +1,833 @@
+---
+title: "Analysis.Rmd"
+output: html_document
+date: "2024-01-15"
+---
+# Load packages, data 
+```{r}
+library(tidyverse)
+library(scales) # Used to put line breaks in long labels
+library(here)
+library(broom)
+library(bootstrap)
+theme_set(theme_bw() + # set the theme
+            theme(text = element_text(size = 18))) # set the default text size
+
+
+
+## Code for bootstrapping 95% confidence intervals
+## Copied from Judith Degen's 245 b repo, helpers.R file
+
+theta <- function(x,xdata,na.rm=T) {mean(xdata[x],na.rm=na.rm)}
+ci.low <- function(x,na.rm=T) {
+  mean(x,na.rm=na.rm) - quantile(bootstrap(1:length(x),1000,theta,x,na.rm=na.rm)$thetastar,.025,na.rm=na.rm)}
+ci.high <- function(x,na.rm=T) {
+  quantile(bootstrap(1:length(x),1000,theta,x,na.rm=na.rm)$thetastar,.975,na.rm=na.rm) - mean(x,na.rm=na.rm)}
+
+
+file_list <- list.files(
+   path = "../../data/03_interactiveSprayLoad/data-collection-phase",    # directory to search within
+   pattern = "rounds.csv$", 
+   recursive = TRUE,          # searches subdirectories
+   full.names = TRUE          # returns the full path
+)
+
+# Some batches have been exported more than once, due to some empirica bugs: 
+# Just need one rounds.csv file from each batch 
+file_list_deduplicated <- file_list[!grepl("exportRemote", file_list)]
+
+data_lst = lapply(file_list_deduplicated, read_csv)  # read all the matching files
+
+raw_data <- do.call("rbind", data_lst) %>% 
+  select(-ends_with("ChangedAt"), 
+         -ended, 
+         -start, 
+         -label, 
+         -nounType, 
+         -sentence, 
+         -images)
+
+```
+
+# Filter data
+```{r}
+# Filter to get production trials' rows and columns 
+data <- raw_data %>% 
+  select(index, gameID, distractor1, distractor_locs, mirroringCondition, directorOrder, target_loc, target, informativityCondition, target_sub, decision, verb, distractor0, distractor_subs, guesserOrder, foreCondition) %>%
+  filter(index > 49) %>% #get only production trials
+  distinct(.keep_all = TRUE) # Each trial has two rows, because of the feedback stage: remove duplicates
+
+# 36 trials for each game, starting with 88 games
+data %>% group_by(gameID) %>% summarize(c = n()) 
+data %>% group_by(gameID) %>% summarize() %>% count()
+data %>% filter(verb %in% c('spray', 'spread', 'load', 'stuff')) %>% count()
+```
+
+# Filter
+```{r}
+# Read in games.csv, which will help us map from game ID to player ID 
+
+gamesFiles_list <- list.files(
+   path = "../../data/03_interactiveSprayLoad/data-collection-phase",        # directory to search within
+   pattern = "games.csv$", 
+   recursive = TRUE,          # searches subdirectories
+   full.names = TRUE          # returns the full path
+)
+
+# Some batches have been exported more than once, due to some empirica bugs: 
+# Just need one rounds.csv file from each batch 
+gamesFiles_list_deduplicated <- gamesFiles_list[!grepl("exportRemote", gamesFiles_list)]
+
+gamesData_lst = lapply(gamesFiles_list_deduplicated, read_csv)  # read all the matching files
+
+raw_games_data <- do.call("rbind", gamesData_lst)
+
+games_to_rooms <- raw_games_data %>% 
+  select(id, roomID) %>%
+  rename(gameID = id)
+
+## Add gameID to the main dataframe
+data_with_roomID <- left_join(data, 
+                      games_to_rooms, 
+                      by = join_by(gameID),
+                      relationship = "many-to-one")
+
+
+
+## Get a CSV that tells you which peer IDs are associated with director roles 
+directors_firstHalf <- read_csv("../../data/03_interactiveSprayLoad/data-collection-phase/playerRoles-batch1-14.csv") %>%
+  filter(role == 'director') %>% 
+  select(-batch)
+directors_secondHalf <-  read_csv("../../data/03_interactiveSprayLoad/data-collection-phase/playerRoles-batch15-18.csv") %>%
+  filter(role == 'director') 
+directors <- rbind(directors_firstHalf, directors_secondHalf)
+
+## Now read in the CSV that maps from room ID to peer ID, and filter to get just directors
+peer_to_room <- read_csv("../../data/03_interactiveSprayLoad/data-collection-phase/peerIDpeerName-batch1-18.csv") %>%
+  mutate(roomID = room_id) %>%
+  filter(peer_name %in% directors$ID)
+
+# Find and remove people with multiple peer IDs: all of these except one had severe 
+# Connection issues. In one case, the audio is ok 65a9b6d6517d71d91b152c94 
+# But there's too many track files for the director to transcribe. 
+# Leaves 73 audio files 
+multi_peer_id <- peer_to_room %>% group_by(roomID) %>% summarize(c = n()) %>% filter(c >1)
+buggy_audio <- peer_to_room %>% filter(roomID %in% multi_peer_id$roomID) %>% select(roomID) %>% c()
+peer_to_room <- peer_to_room %>% filter(!(roomID %in% buggy_audio$roomID))
+
+
+# Left join drops peers which we don't have trial data for
+data_all_identifiers <- left_join(data_with_roomID, peer_to_room) 
+
+# Filter non-native speakers, entirely silent submissions, etc
+data_all_identifiers %>% 
+  filter(peer_name != '01HM9CR96TM9Z0J774P3CHHP9Z') %>% #NNS
+  filter(peer_name != '01HMFFF55WVG7MNF6660MH5SGX') %>% # NNS, missed many trials
+  filter(peer_name != '01HMEJZPBQXJF57QHDQP7R7VKH') %>% # NNS, not doing task
+  filter(peer_name != '01HM97Z6TW6D2WHKM33JEASA31') %>% # NNS/ non standard accent? 
+  filter(peer_name != '01HMH1B5F7NPCHS5S47GAJBS7M') %>% # NNS/ non standard accent?
+  filter(peer_name != '01HMEE8SWG6FGQFEBVPWAMZMPA' ) %>% # Silence 
+  filter(peer_name != '01HMEJX8CXQ4R9TD53BJA1REG9') %>% # Not complete dyad
+  filter(peer_name != '01HMFBV8ZBS5R5VBW9ATTFR1XS') %>% # Not complete dyad
+  filter(peer_name != '01HMH1GWBW5YMZMZ483ETNCFNE')     # Not complete dyad
+  
+
+## Now read in the transcriptions... 
+transcriptions_batch1_15 <- read_csv("../../data/03_interactiveSprayLoad/data-collection-phase/all_transcriptions_batch1-15.csv") %>%
+  select(-idx)
+transcriptions_batch15_18 <- read_csv("../../data/03_interactiveSprayLoad/data-collection-phase/all_transcriptions_batch15-18.csv")
+
+transcriptions <- rbind(transcriptions_batch15_18, transcriptions_batch1_15) %>%
+  mutate(index = trialIndex + 49) %>%
+  filter(index%%1 == 0) %>% # Chitchat was coded as inter-utterance for first 15 batches
+  mutate(peer_name = player_name) %>% 
+  select(-peer_id, -verb)
+
+
+
+## and again, join it to the bigger data set (mapping with peerID this time)
+# Left join will drop transcriptions from files that have been removed from 
+# data_all_identifiers (NNS, non-task doers)
+cleaned_data <- left_join(data_all_identifiers, transcriptions, by = join_by(index, peer_name)) %>%
+  filter(first_noun == 'loc' | first_noun == 'sub') %>%
+  mutate(first_noun = recode(first_noun, 'loc' = 1, 'sub' = 0)) %>% 
+  mutate(item = paste(target_sub, target_loc, sep = "")) %>%
+  mutate(verbType = case_when(
+    verb == 'spray' | verb == "spread" | verb == "stuff"| verb == "load" ~ "critical", 
+    verb == "drench"| verb == "cover" | verb == "put" | verb == "stash" ~ "control")) %>%  
+  select(gameID, peer_name, index, verb, verbType, item, first_noun,
+         informativityCondition, foreCondition, mirroringCondition, 
+         text) 
+```
+
+```{r}
+
+# Resulting data frame has 63 games, 
+# With an average of 27.11 trials per game with usable transcription 
+# Range from 14 to 32 (32 is the max since we didn't code fillers)
+
+cleaned_data %>% group_by(gameID) %>% 
+  summarize(c = n())
+
+cleaned_data %>% group_by(gameID) %>% 
+  summarize(c = n()) %>%
+  summarize(min_Number_trials = min(c), max = max(c), mean = mean(c))
+
+
+
+```
+
+
+```{r}
+
+cleaned_data %>% 
+  filter(verb %in% c('spray', 'load', 'stuff', 'spread')) %>%
+  group_by(verb, foreCondition) %>%
+  ggplot(aes(x = foreCondition, y = first_noun)) +
+  stat_summary(fun = "mean", geom = "bar") +
+  stat_summary(fun.data = "mean_cl_boot",
+               geom = "linerange",
+               size = 1.5) +
+  facet_wrap(~verb) + 
+  labs(y = 'Proportion', 
+       x = 'Foregrounding Condition', 
+       title = "Proportion of Location-First Utterances")
+
+
+cleaned_data %>% 
+  filter(verb %in% c('spray', 'load', 'stuff', 'spread')) %>%
+  group_by(verb, informativityCondition) %>%
+  ggplot(aes(x = informativityCondition, y = first_noun)) +
+  stat_summary(fun = "mean", geom = "bar") +
+  stat_summary(fun.data = "mean_cl_boot",
+               geom = "linerange",
+               size = 1.5) +
+  facet_wrap(~verb) +
+  labs(y = 'Proportion', 
+       x = 'InformativityCondition', 
+       title = "Location-First Utterances")
+```
+```{r}
+
+agr <- cleaned_data %>% 
+  filter(verb %in% c('load', 'stuff', 'spread', 'spray')) %>%
+  group_by(foreCondition, informativityCondition) %>% 
+  summarize(mean = mean(first_noun), 
+            low = ci.low(first_noun), 
+            high = ci.high(first_noun)) %>%
+  mutate(ciHigh = mean + high, ciLow = mean - low) 
+
+agr %>% 
+  ggplot(aes(x = foreCondition, 
+             y = mean)) +
+  geom_col(fill = "#006a52", color = "black") +
+  geom_errorbar(aes(ymax = ciHigh, 
+                    ymin = ciLow), 
+                width =.1, 
+                linewidth = 1) +
+  scale_x_discrete(labels = c("Location", "Substance")) +
+  facet_grid(~informativityCondition,
+             labeller = labeller(informativityCondition = as_labeller(c('loc' = "Location Informative", 
+                                                'sub' = "Substance Informative"), 
+                                                default=label_wrap_gen(10)))) +
+  labs(y = 'Proportion', 
+       x = 'Foregrounded Noun', 
+       title = "Proportion of Location-First Utterances") + 
+  theme(strip.background =element_rect(fill="white"))
+
+ggsave(file = "noverbFullDesign.png")
+
+```
+
+```{r}
+
+# Over all critical verbs, location-first forms around 33.17% of the time
+cleaned_data %>% 
+  filter(verb %in% c('load', 'stuff', 'spread', 'spray')) %>%
+  summarize(mean = mean(first_noun), 
+            low = ci.low(first_noun), 
+            high = ci.high(first_noun), 
+            n = n()) 
+
+cleaned_data %>% 
+  filter(verb %in% c('load', 'stuff', 'spread', 'spray')) %>%
+  group_by(informativityCondition) %>%
+  summarize(mean = mean(first_noun), 
+            low = ci.low(first_noun), 
+            high = ci.high(first_noun), 
+            n = n()) 
+  
+  cleaned_data %>% 
+  filter(verb %in% c('load', 'stuff', 'spread', 'spray')) %>%
+  group_by(foreCondition) %>%
+  summarize(mean = mean(first_noun), 
+            low = ci.low(first_noun), 
+            high = ci.high(first_noun), 
+            n = n()) 
+
+
+agr <- cleaned_data %>% 
+  filter(verb %in% c('load', 'stuff', 'spread', 'spray')) %>%
+  group_by(verb, foreCondition, informativityCondition) %>% 
+  summarize(mean = mean(first_noun), 
+            low = ci.low(first_noun), 
+            high = ci.high(first_noun)) %>%
+  mutate(ciHigh = mean + high, ciLow = mean - low) 
+
+library(colorspace)
+myColors <- c("#FEC51D", "#620059", "#9d2235","#006a52")
+fullColors <- c(myColors, lighten(myColors))
+
+agr$verb <- factor(agr$verb, levels = c('spread', 'load', 'spray', 'stuff'))
+agr %>% 
+  ggplot(aes(x = foreCondition, y = mean)) +
+  geom_col(aes(fill = verb)) +
+  scale_fill_manual("legend", values = myColors) +
+  scale_alpha_manual("legend", values = c(.6, 1)) +
+  geom_errorbar(aes(ymax = ciHigh, ymin = ciLow), width =.1) +
+  scale_x_discrete(labels = c("Loc", "Sub")) +
+  scale_y_continuous(breaks = c(0, .5 )) +
+  facet_wrap(verb ~ informativityCondition, 
+             nrow = 1,
+            labeller = labeller(
+              informativityCondition = as_labeller(c('loc' = "Loc Informative", 
+                                                'sub' = "Sub Informative"), 
+                                                default=label_wrap_gen(10)), 
+              verb= as_labeller(c('spray' = "Spray", 'spread' = "Spread", 
+                                  'load'= "Load", 'stuff' = "Stuff")))) +
+  labs(y = 'Prop. Loc-First', 
+       x = 'Foregrounded Item') + 
+  guides(fill="none", alpha = "none") +
+  theme(
+  panel.grid.major.x = element_blank(),
+  panel.grid.minor.x = element_blank(), 
+  strip.background = element_rect(fill="white"),
+  strip.text.x = element_text(size = 10),
+  axis.title.x = element_text(size = 18)) 
+
+
+ggsave('full_design.png', height = 3, width = 8)
+```
+
+```{r}
+# Plot by-participant analyses 
+theme_set(theme_classic())
+good_participants <- cleaned_data %>%
+  group_by(peer_name, verb) %>%
+  summarize(locForms = sum(first_noun),
+            `# Trials` = n(),
+            propLoc = locForms/`# Trials`) %>% 
+  select(-propLoc, -locForms) %>%
+  #get rid of participants who did not produce more than 2 utterances for each verb 
+  pivot_wider(names_from = verb, values_from = `# Trials`) %>% 
+  filter(load >=2, spread >=2, stuff >=2, spray >=2) 
+
+cleaned_data %>%
+  filter(peer_name %in% good_participants$peer_name) %>%
+  filter(verb == 'spray'| verb == "load" | verb == 'stuff' | verb == 'spread') %>%
+  mutate(verb = factor(verb, levels = c("spread", "load", "spray", "stuff"), labels = c("Spread", "Load", "Spray",  "Stuff"))) %>%
+  group_by(peer_name, verb) %>% 
+  summarize(locForms = sum(first_noun),
+            `# Trials` = n(),
+            propLoc = locForms/`# Trials`) %>% 
+  arrange(locForms) %>% 
+  ggplot(aes(x = reorder(peer_name, propLoc), y = propLoc, )) +
+  geom_col(aes(fill = verb)) +
+  scale_fill_manual("legend", values = c("#FEC51D","#620059", "#9d2235",  "#006a52")) +
+  # geom_text(aes(x = participant_audio_id, y = propLoc, label = `# Trials`))
+  theme (axis.text.x=element_blank(), legend.title = element_blank()) +
+  scale_y_continuous(
+  breaks = c(1, 2, 3, 4),
+  label = c("25", "50", "75", "100")) +
+  labs(x = "Participant", 
+       y = "Percentage", 
+       title = "Percentage of Location-first Utterances") + 
+  theme(text = element_text(size = 18), plot.title = element_text(size = 18)) 
+
+ggsave("implicationalHierarchy.png", height = 4)
+```
+# Check for priming effects
+```{r}
+# Self-priming: Do people produce more and more of one structure over time? 
+
+df.self_prime <- cleaned_data %>% 
+    filter(verb == 'spray' | verb == "load" | verb == "stuff" | verb == "spread") %>%
+  group_by(peer_name) %>% 
+  nest() %>%
+  mutate(fit = map(data, ~ lm(first_noun ~ index, data = .x)),
+         results = map(fit, tidy)) %>%
+    unnest(results)
+
+
+df.self_prime %>%
+    filter(p.value <=.05 & term == 'index') %>% 
+    nrow() %>%
+    print()
+
+```
+
+```{r}
+# Priming by Control Verbs, which force participants to use one or the other structure
+
+getPreviousTrialType <- function(itemIndex, participant){
+  previous_trial <- filter(cleaned_data, peer_name == participant, index == itemIndex-1)
+  
+  if (nrow(previous_trial == 1)){
+    previous_verb<- previous_trial$verb
+  }
+  else{
+    return(3)
+  }
+  
+  if (previous_verb == 'cover' | previous_verb == 'drench') {
+  previous_trial_type <- 1  
+  }
+  else if (previous_verb == "put" | previous_verb == "stash") {
+     previous_trial_type <- 0
+   }
+  else{
+      previous_trial_type <- 3
+    }
+  return(previous_trial_type)
+}
+
+cleaned_data <- cleaned_data %>% 
+  mutate(previousTrialType = map2(cleaned_data$index, cleaned_data$peer_name, getPreviousTrialType))
+
+cleaned_data$previousTrialType <- cleaned_data$previousTrialType %>% 
+  unlist() %>% 
+  as.factor()
+
+
+
+cleaned_data %>% 
+  filter(verb == 'spray' | verb == "load" | verb == "stuff" | verb == "spread") %>%
+  filter(previousTrialType == 0) %>% 
+  group_by(first_noun) %>% 
+  summarize(n = n()) %>% 
+  pivot_wider(names_from = first_noun, values_from = n) %>% 
+  mutate(r = `1`/(`0`+`1`))
+
+cleaned_data %>% 
+  filter(verb == 'spray' | verb == "load" | verb == "stuff" | verb == "spread") %>%
+  filter(previousTrialType == 1) %>% 
+  group_by(first_noun) %>% 
+  summarize(n = n()) %>% 
+  pivot_wider(names_from = first_noun, values_from = n) %>% 
+  mutate(r = `1`/(`0`+`1`))
+
+cleaned_data %>% 
+  filter(verb == 'spray' | verb == "load" | verb == "stuff" | verb == "spread") %>%
+  filter(previousTrialType == 3) %>% 
+  group_by(first_noun) %>% 
+  summarize(n = n()) %>% 
+  pivot_wider(names_from = first_noun, values_from = n) %>% 
+  mutate(r = `1`/(`0`+`1`))
+
+cleaned_data %>%
+  filter(verb == 'spray' | verb == "load" | verb == "stuff" | verb == "spread") %>%
+  group_by(previousTrialType, first_noun) %>% 
+  summarize(n = n()) %>% 
+  pivot_wider(names_from = first_noun, values_from = n) %>% 
+  mutate(r = `1`/(`0`+`1`)) %>% 
+  ggplot(aes(x = previousTrialType, y = r)) + 
+  geom_col()
+
+
+cleaned_data %>% 
+  filter(verb %in% c('spray', 'load', 'stuff', 'spread')) %>%
+  group_by(previousTrialType) %>% 
+  ggplot(aes(x = previousTrialType, y = first_noun)) + 
+  stat_summary(fun = "mean") + 
+  stat_summary(fun.data = "mean_cl_boot",
+               geom = "linerange",
+               size = 1.5) + 
+  scale_x_discrete(labels = c("Sub-First Control", "Loc-First Control", "Not A Control Verb\n(Filler or Critical)")) + 
+  xlab("Previous Trial") + 
+  ylab("Proportion Loc-First")
+
+```
+
+```{r}
+
+getPreviousProduction <- function(itemIndex, participant){
+  previous_trial <- filter(cleaned_data, peer_name == participant, index == itemIndex-1)
+  
+  if (nrow(previous_trial == 1)){
+    previous_choice<- previous_trial$first_noun
+  }
+  else{
+    return(3)
+  }
+  
+  return(previous_choice)
+}
+cleaned_data <- cleaned_data %>% 
+  mutate(previousTrialProduction = map2(cleaned_data$index, 
+                                        cleaned_data$peer_name, 
+                                        getPreviousProduction))
+
+cleaned_data$previousTrialProduction <- cleaned_data$previousTrialProduction %>% 
+  unlist() %>% 
+  as.factor()
+
+
+fit.foo <- lm(first_noun~previousTrialProduction, 
+              data = cleaned_data)
+```
+
+
+
+```{r}
+# Read in surprisal data, join to data frame 
+surp <- read_csv("surprisals.csv") %>%
+  rename(peer_name = participant_audio_id, index = trial_index)
+
+df <- left_join(cleaned_data, surp, by = join_by(peer_name, index)) %>%
+  mutate(first_noun = as_factor(first_noun))
+
+
+df %>% 
+  group_by(verb, item, first_noun) %>%
+  summarize(meanItemSurp = mean(surprisal)) %>% 
+  ggplot(aes(x = item, y = meanItemSurp, color = first_noun), alpha = .3) + 
+  geom_point() + 
+  facet_wrap(~verb, scales = "free") 
+
+# Get summary statistic for surprisal of loc-first and sub-first 
+by_item_surprisal_value <- df %>% 
+  group_by(verb, item, first_noun) %>%
+  summarize(mean_surp = mean(surprisal)) 
+
+# Quick check that Location first (blue) is higher surprisal for 
+# obligatorily substance-first verbs (stash)
+# and lower for obligatorily location-first like drench, cover, 
+by_item_surprisal_value %>% 
+  ggplot(aes(x= first_noun, y = mean_surp, color = first_noun)) + 
+  geom_jitter(width = .2) + 
+  geom_line(aes(group = item), color = "gray")+ 
+  facet_wrap(~verb)
+
+# I realize now what you were saying about some sentences being 0- 
+# It's not that the language model assigns them a probability of 0 and therefore
+# a weird surprisal- it's that they never occurred in this experiment. 
+# I therefore can't calculate the surprisal for those alternatives. I'll just 
+# Set it to some maximum value (higher than any of the observed surprisals?)
+# Get the loc-first and sub-first surprisal ratios 
+
+# Doesn't matter for the modelling: Only a problem for control verbs, and 
+# We aren't predicting those 
+by_item_surprisal_ratio <- by_item_surprisal_value %>%
+  pivot_wider(values_from = mean_surp, names_from = first_noun, values_fill = 2) %>% 
+  mutate(surprisal_ratio = `0`/`1` ) %>% 
+  select(verb, item, surprisal_ratio) 
+
+
+df <- left_join(df, by_item_surprisal_ratio, by = join_by(item, verb))
+df <- left_join(df, by_item_surprisal_value, by = join_by(item, verb, first_noun))
+
+# Higher ratios have a higher surprisal on the substance-first form 
+# And therefore a preference for loc-first
+# For Cover, Drench, Load, Spread, Stash and Stuff, the trend is positive 
+# For spray, higher surprisal of sub-first form has small negative correlation
+# With loc-first forms... weird. 
+
+# Can't say anything about 'put' since it doesn't alternate: 
+# Unlike other control verbs, can't compare to the coerced form, since that happens
+# To be a grammatical sentence with reinterpreted substance/location 
+df %>% 
+  group_by(verb, item, surprisal_ratio) %>%
+  summarize(firstNounLocProportion = mean(as.numeric(as.character(first_noun)))) %>%
+  ggplot(aes(x = surprisal_ratio, y = firstNounLocProportion), alpha = .3) + 
+  geom_point() + 
+  geom_smooth(method= 'lm') +
+  facet_wrap(~verb, scales = "free") 
+
+
+
+```
+
+```{r}
+
+# BY VERB Analyses 
+
+df_v <- left_join(cleaned_data, surp, by = join_by(peer_name, index)) %>%
+  mutate(first_noun = as_factor(first_noun))
+
+# Get summary statistic for surprisal of loc-first and sub-first by VERB
+by_verb_surprisal_value <- df %>% 
+  group_by(verb, first_noun) %>%
+  summarize(verb_mean_surp = mean(surprisal)) 
+
+# Extract just the average surprisal for any lcoation-first form, by VERB
+loc_first_surprisals <- by_verb_surprisal_value %>% 
+  filter(first_noun == 1) %>% 
+  select(verb, verb_mean_surp) %>%
+  rename(loc_first_surp = verb_mean_surp)
+
+# Get also the ratio between average surprisal of sub and loc-first forms 
+by_verb_surprisal_ratio <- by_verb_surprisal_value %>%
+  pivot_wider(values_from = verb_mean_surp, names_from = first_noun, values_fill = 2) %>% 
+  mutate(verb_surprisal_ratio = `0`/`1` ) %>% 
+  select(verb, verb_surprisal_ratio) 
+
+# Get proportion of first loc uses
+firstNounLocProps <- df_v %>% 
+  group_by(verb) %>%
+  summarize(verb_proportion_loc_first = mean(as.numeric(as.character(first_noun)))) 
+
+df_v <- left_join(df_v, by_verb_surprisal_ratio, by = join_by(verb))
+df_v <- left_join(df_v, by_verb_surprisal_value, by = join_by(verb, first_noun))
+df_v <- left_join(df_v, loc_first_surprisals, by = join_by(verb))
+df_v <- left_join(df_v, firstNounLocProps, by = join_by(verb))
+
+beep <- left_join(loc_first_surprisals, firstNounLocProps, by = join_by(verb))
+
+beep %>% 
+  filter(verb %in% c("spray", "stuff", "spread", "load")) %>%
+  ggplot(aes(x = loc_first_surp, y = verb_proportion_loc_first, label = verb), alpha = .3) + 
+  geom_point() + 
+  geom_smooth(method= 'lm') +
+  geom_text(hjust=0, vjust=0)
+
+```
+
+# Frequentist Models
+```{r}
+suppressMessages(library(lme4))
+
+d <- df %>% 
+  filter(verb %in% c('load', 'stuff', 'spread', 'spray')) %>% 
+  mutate(foreCondition = recode(foreCondition, 'loc' = 1, 'sub' = 0)) %>%
+  mutate(informativityCondition = recode(informativityCondition, 'loc' = 1, 'sub' = 0)) %>% 
+  select(peer_name, item, first_noun, verb,
+         informativityCondition, foreCondition, mirroringCondition, surprisal_ratio, surprisal)
+
+## Read in norming data  
+nd <- read_csv(here("data", "02_normingAvailabilityStims", "normingAvailabilityStims-trials.csv")) %>% 
+  filter(workerid != '379') %>%  #NNS
+  filter(workerid != '377') %>% # Returned (consent revokes)
+  filter(workerid !='418') #timed out (Prolific doesn't show them as paid)
+
+
+norming_data <- nd %>% 
+  mutate(foreCondition = recode(foregrounded, 'loc' = 1, 'sub' = 0)) %>%
+  mutate(item = recode(scene, 'cheesemushroom' = 'cheesemushrooms')) %>%
+  select(verb, item, foreCondition, mirroringCondition, response) %>% 
+  group_by(item, foreCondition, mirroringCondition) %>% 
+  summarize(affectedness = mean(response))
+
+# Add the affectedness
+data_with_norms <- left_join(d, norming_data)
+
+# Center predictors: Last step, after the set of data points is defined 
+d_c <- data_with_norms %>%
+  mutate(c_foregrounded = as.numeric(foreCondition)-mean(as.numeric(foreCondition))) %>%
+  mutate(c_mirroring = mirroringCondition-mean(mirroringCondition)) %>% 
+  mutate(c_informativity = informativityCondition-mean(informativityCondition)) %>%
+  mutate(c_surprisal_ratio = surprisal_ratio - mean(surprisal_ratio)) %>% 
+  mutate(c_surprisal = surprisal - mean(surprisal)) %>% 
+  mutate(c_affectedness = affectedness - mean(affectedness)) %>% 
+  select(-foreCondition, -mirroringCondition, -informativityCondition) %>% 
+  rename(verb = verb)
+
+# I think we want mirorring and suprrisal not tohave interactions, but 
+# Foregroudning and informativity yes to interact? 
+
+
+# With main effects foregrounding, informativity, and mirroring, and with 1-way
+# interaction between foregrounding and informativity, I get nothing significant
+# (except intercept)
+
+# If I also add a main effect of surprisal, it fails to converge
+# (Surprising, surprisal was really predictie for the non-interactive model?)
+# Can get convergence with all fit, see below. 
+
+# With just random slopes 
+# ({foreground, informativity, mirroring} x {participant, item}), no convergence
+
+# With just random intercepts for participant and item, it converges with only 
+# the intercept significant.
+
+# 
+# ## THIS ONE:
+# m1 = glmer(first_noun ~ c_foregrounded*c_informativity + c_mirroring + c_surprisal_ratio +
+#           (1 + c_foregrounded + c_informativity + c_mirroring | peer_name ) +
+#           (1 + c_foregrounded + c_informativity + c_mirroring | item),
+#          data = d_c, family = "binomial",)
+# 
+# m01 = glmer(first_noun ~ c_foregrounded*c_informativity + c_mirroring + c_surprisal_ratio + verb +
+#           (1 + c_foregrounded + c_informativity + c_mirroring | peer_name ) +
+#           (1 + c_foregrounded + c_informativity + c_mirroring | item),
+#          data = d_c, family = "binomial",)
+# 
+# m2 = glmer(first_noun ~ c_foregrounded*c_informativity + c_mirroring + verb +
+#           (1 | peer_name ) +
+#           (1 | item),
+#          data = d_c, family = "binomial",)
+
+# Does not converge 
+m1 = glmer(first_noun ~ c_foregrounded*c_informativity + c_surprisal_ratio + c_mirroring + 
+  (c_foregrounded*c_informativity + c_surprisal_ratio + c_mirroring|peer_name) +
+  (1+c_foregrounded*c_informativity + c_surprisal_ratio + c_mirroring|item),
+data = d_c, family = "binomial")
+
+# Does not converge
+m2 = glmer(first_noun ~ c_foregrounded*c_informativity + c_surprisal_ratio + c_mirroring + 
+  (1 + c_foregrounded*c_informativity + c_surprisal_ratio + c_mirroring|peer_name) +
+  (1 + c_foregrounded*c_informativity + c_surprisal_ratio + c_mirroring|item),
+data = d_c, family = "binomial")
+
+# Does not converge- this one was two steps by accident, took out the independent informativity | peer and informativity | item 
+m3 = glmer(first_noun ~ c_foregrounded*c_informativity + c_surprisal_ratio + c_mirroring + 
+  (1 + c_foregrounded + c_foregrounded:c_informativity + c_surprisal_ratio + c_mirroring|peer_name) +
+  (1 + c_foregrounded + c_foregrounded:c_informativity + c_surprisal_ratio + c_mirroring|item),
+data = d_c, family = "binomial")
+
+
+# Does not converge - take out foregrounding | item 
+m4 = glmer(first_noun ~ c_foregrounded*c_informativity + c_surprisal_ratio + c_mirroring + 
+  (1 + c_foregrounded + c_foregrounded:c_informativity + c_surprisal_ratio + c_mirroring|peer_name) +
+  (1 + c_foregrounded:c_informativity + c_surprisal_ratio + c_mirroring|item),
+data = d_c, family = "binomial")
+
+
+# Does not converge - take out mirroring| item 
+m5 = glmer(first_noun ~ c_foregrounded*c_informativity + c_surprisal_ratio + c_mirroring + 
+  (1 + c_foregrounded + c_foregrounded:c_informativity + c_surprisal_ratio + c_mirroring|peer_name) +
+  (1 + c_foregrounded:c_informativity + c_surprisal_ratio |item),
+data = d_c, family = "binomial")
+
+
+
+# Does not converge - c_surprisal ratio | item
+m6 = glmer(first_noun ~ c_foregrounded*c_informativity + c_surprisal_ratio + c_mirroring + 
+  (1 + c_foregrounded + c_foregrounded:c_informativity + c_surprisal_ratio + c_mirroring|peer_name) +
+  (1 + c_foregrounded:c_informativity |item),
+data = d_c, family = "binomial")
+
+
+
+# Does not converge - take out c_foregrounded:c_informativity |item
+m7 = glmer(first_noun ~ c_foregrounded*c_informativity + c_surprisal_ratio + c_mirroring + 
+  (1 + c_foregrounded + c_foregrounded:c_informativity + c_surprisal_ratio + c_mirroring|peer_name) +
+  (1 |item),
+data = d_c, family = "binomial")
+
+
+# Does not converge - take out c_foregrounded | peer
+m8 = glmer(first_noun ~ c_foregrounded*c_informativity + c_surprisal_ratio + c_mirroring + 
+  (1 + c_foregrounded:c_informativity + c_surprisal_ratio + c_mirroring|peer_name) +
+  (1 |item),
+data = d_c, family = "binomial")
+
+
+# Does not converge - take out c_mirroring | peer
+m9 = glmer(first_noun ~ c_foregrounded*c_informativity + c_surprisal_ratio + c_mirroring + 
+  (1 + c_foregrounded:c_informativity + c_surprisal_ratio |peer_name) +
+  (1 |item),
+data = d_c, family = "binomial")
+
+
+# CONVERGES!! 
+m10 = glmer(first_noun ~ c_foregrounded*c_informativity + c_surprisal_ratio + c_mirroring + 
+  (1 + + c_surprisal_ratio |peer_name) +
+  (1 |item),
+data = d_c, family = "binomial")
+
+
+# Start the process over, including fixed effect of affectedness
+# Does not converge, smallest random is c_informativity | item
+m11 = glmer(first_noun ~ c_foregrounded*c_informativity + c_mirroring + c_surprisal_ratio + c_affectedness +
+          (1 + c_foregrounded + c_informativity + c_mirroring | peer_name ) +
+          (1 + c_foregrounded + c_informativity + c_mirroring | item),
+         data = d_c, family = "binomial",)
+
+#Does not converge, smallest random is c_informativity | peer_name
+m12 = glmer(first_noun ~ c_foregrounded*c_informativity + c_mirroring + c_surprisal_ratio + c_affectedness +
+          (1 + c_foregrounded + c_informativity + c_mirroring | peer_name ) +
+          (1 + c_foregrounded + c_mirroring | item),
+         data = d_c, family = "binomial",)
+
+# Does not converge, smallest is mirroring | item
+m13 = glmer(first_noun ~ c_foregrounded*c_informativity + c_mirroring + c_surprisal_ratio + c_affectedness +
+          (1 + c_foregrounded + c_mirroring | peer_name ) +
+          (1 + c_foregrounded + c_mirroring | item),
+         data = d_c, family = "binomial",)
+
+# Does not converge, smallest is foregrounding |peer name
+m14 = glmer(first_noun ~ c_foregrounded*c_informativity + c_mirroring + c_surprisal_ratio + c_affectedness +
+          (1 + c_foregrounded + c_mirroring | peer_name ) +
+          (1 + c_foregrounded | item),
+         data = d_c, family = "binomial",)
+
+# Does not converge, next to go is mirroring | peer_name and foregrounding | item 
+m15=  glmer(first_noun ~ c_foregrounded*c_informativity + c_mirroring + c_surprisal_ratio + c_affectedness +
+          (1 | peer_name ) +
+          (1 + c_foregrounded | item),
+         data = d_c, family = "binomial",)
+
+
+# Converges! 
+m16 = glmer(first_noun ~ c_foregrounded*c_informativity + c_mirroring +  c_affectedness +
+          (1 | peer_name ) +
+          (1 | item),
+         data = d_c, family = "binomial",)
+
+
+# Preregistered just informativity and foregrounding; this fails to converge 
+# Take out the affectedness by item
+m16 = glmer(first_noun ~ c_foregrounded*c_informativity +c_affectedness+
+          (1 + c_foregrounded + c_informativity + c_affectedness | peer_name ) +
+          (1 + c_foregrounded + c_informativity + c_affectedness  | item),
+         data = d_c, family = "binomial",)
+
+
+
+m17 = glmer(first_noun ~ c_foregrounded*c_informativity +c_affectedness+
+          (1 + c_foregrounded + c_informativity + c_affectedness | peer_name ) +
+          (1 + c_foregrounded + c_informativity  | item),
+         data = d_c, family = "binomial")
+
+# this is what we reported
+m18 = glmer(first_noun ~ c_foregrounded*c_informativity +c_affectedness+
+          (1 | peer_name ) +
+          (1 | item),
+         data = d_c, family = "binomial",)
+
+library(performance)
+r2(m18)
+summary(m18)
+```
+
+
+```{r}
+# To use All Fit
+diff_optims <- allFit(m17, maxfun = 1e5)
+diff_optims_OK <- diff_optims[sapply(diff_optims, is, "merMod")]
+
+convergence_results <- lapply(diff_optims_OK, function(x) x@optinfo$conv$lme4$messages)
+working_indices <- sapply(convergence_results, is.null)
+
+if(sum(working_indices) == 0){
+  print("No algorithms from allFit converged. You may still be able to use the results, but proceed with extreme caution.")
+} else {
+  first_fit <- diff_optims[working_indices][[1]]
+}
+
+
+summary(first_fit)
+```
+
+
+# Bayesian Models
+```{r}
+library("brms")
+d_c$first_noun <- as.numeric(d_c$first_noun)
+fit.brm = brm(formula = first_noun ~ c_foregrounded*c_informativity +
+                      c_surprisal_ratio + c_mirroring +
+                      (c_foregrounded*c_informativity + c_surprisal_ratio + c_mirroring||peer_name) +
+                      (1+c_foregrounded*c_informativity + c_surprisal_ratio + c_mirroring||item),
+                    data = d_c,
+                    seed = 1)
+```

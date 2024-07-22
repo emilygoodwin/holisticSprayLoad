@@ -1,0 +1,795 @@
+---
+title: "Spray-Load Availability-Based Production Results"
+output: html_notebook
+---
+# Imports
+```{r}
+library(tidyverse)
+library(broom)
+library(scales) # Used to put line breaks in long labels
+library(ggrepel)
+theme_set(theme_bw() + # set the theme
+            theme(text = element_text(size = 21))) # set the default text size
+## Read in the data, filter out filler and control trials
+# datapath <- "All_Transcriptions_HandEdited.csv"
+raw_data <- read_csv("All_Transcriptions_HandEdited.csv") 
+
+## Code for bootstrapping 95% confidence intervals
+## Copied from Judith Degen's 245 b repo, helpers.R file
+library(bootstrap)
+theta <- function(x,xdata,na.rm=T) {mean(xdata[x],na.rm=na.rm)}
+ci.low <- function(x,na.rm=T) {
+  mean(x,na.rm=na.rm) - quantile(bootstrap(1:length(x),1000,theta,x,na.rm=na.rm)$thetastar,.025,na.rm=na.rm)}
+ci.high <- function(x,na.rm=T) {
+  quantile(bootstrap(1:length(x),1000,theta,x,na.rm=na.rm)$thetastar,.975,na.rm=na.rm) - mean(x,na.rm=na.rm)}
+
+```
+
+```{r}
+# 60 total participants, of which each has 38 utterances, 
+raw_data %>% 
+  group_by(participant_audio_id) %>%
+  summarize(n = n()) %>% 
+  summarize(total_participants = n())
+
+raw_data %>% 
+  summarize(total_utterances = n()) 
+
+```
+
+# Clean Data
+```{r}
+d <- raw_data %>% 
+  filter(participant_audio_id != '6203f830-9f85-45f1-aa3f-f961b6ad4b94') %>% #No Audio
+  filter(participant_audio_id != 'bd0ad0a8-5802-4bc1-afda-2451c0ea7955') %>% #No Audio
+  filter(participant_audio_id != 'e7458f96-ff66-4873-8220-595ccd61e540') %>% #Self Report NNS
+  filter(participant_audio_id != 'e89a3ce0-bb45-4cdd-8333-c0335d1f5a94') %>% #Self Report NNS
+  filter(participant_audio_id != '4f40a7e3-2764-46bf-8a5f-3e8682eff108') %>% #Unsure NNS 
+  filter(`Correct Event Construal?` == TRUE) %>%
+  filter(`Right Verb, used as spray-load` == TRUE) 
+
+# There are 11 instances of a control verb in a coerced structure 
+# This column is coded as TRUE or NA, so to keep good ones filter for is.na()
+d %>% 
+  filter(`coerced control verb?` == TRUE) %>% 
+  select(`coerced control verb?`, verb, scene, foregrounded, transcription, participant_audio_id, )
+
+d %>% 
+  filter(`coerced control verb?` == TRUE) %>% 
+  group_by(participant_audio_id) %>% 
+  summarize(n = n())
+
+data <- d %>% 
+  filter(is.na(`coerced control verb?`))
+
+
+# Total of 1619 trials with the right event construal, correct verb, no coercion
+# Fillers are already filtered out: value NOTCODED for correct event construal
+
+data %>% 
+  group_by(first_noun_hand) %>% 
+  summarize(n = n()) 
+
+# In the analyses below, we remove additional trials with object drop 
+# for a total of 1613 usable  trials
+# OF which 808 are control trials and 805 are critical trials 
+data %>% 
+  filter(first_noun_hand == 'sub' | first_noun_hand == 'loc') %>%
+  summarize(n = n())
+
+data %>% 
+  filter(first_noun_hand == 'sub' | first_noun_hand == 'loc') %>%
+  group_by(verb_type) %>%
+  summarize(n = n())
+  
+
+
+```
+
+
+# Plot By Condition 
+```{r, out.width = "5%"}
+# loc-first productions on 198 of the 805 critical trials, or 24.59%
+data %>%  
+  filter(verb_type == 'critical') %>% 
+  filter(first_noun_hand == 'sub' | first_noun_hand == 'loc') %>% 
+  mutate(first_noun_factor = recode(first_noun_hand, 'loc' = 1, 'sub' = 0)) %>%
+  group_by(first_noun_hand) %>%
+  summarize(mean = mean(first_noun_factor),
+            count = n())
+
+agr_critical <- data %>%  
+  filter(verb_type == 'critical') %>% 
+  filter(!is.na(first_noun_hand), first_noun_hand != 'DROP', first_noun_hand != 'sub*') %>% 
+  mutate(first_noun_factor = recode(first_noun_hand, 'loc' = 1, 'sub' = 0)) %>%
+  group_by(foregrounded) %>% 
+  summarize(mean = mean(first_noun_factor), 
+            count = n(),
+            low = ci.low(first_noun_factor), 
+            high = ci.high(first_noun_factor)) %>%
+  mutate(ciHigh = mean + high, ciLow = mean - low) 
+
+# We end up with 401 loc-foregrounded trials and 404 sub-foregrounded trials
+# Exclusions didn't disproportionately affect one condition -- nice!
+# 28.17% of the location-foregrounded trials resulted in loc-first productions
+# 21.04% of the substance-foregrounded trials resulted in loc-first productions
+agr_critical
+
+overall_foregrounding_plot <- agr_critical %>% 
+  ggplot(aes(x = foregrounded, y = mean)) + 
+  geom_col(fill = "#006a52", color = "black") +
+  geom_errorbar(aes(ymax = ciHigh, ymin = ciLow), width =.1) +
+  labs(x = "Foregrounded Item", 
+       y = "Prop. Loc-First") +
+  scale_x_discrete(labels= c("Loc", "Sub"))+
+  theme(
+  panel.grid.major.x = element_blank(),
+  panel.grid.minor.x = element_blank(), 
+  axis.title.x = element_text(size = 20)) 
+
+overall_foregrounding_plot
+# ggsave("Figures/foregroundingOverallEffectGreen.png", height = 9)
+```
+
+
+# By Participant data 
+```{r}
+
+agr_s <- data %>% 
+  filter(verb_type == 'critical') %>% 
+  filter(!is.na(first_noun_hand), first_noun_hand != 'DROP', first_noun_hand != 'sub*') %>% 
+  mutate(first_noun_factor = recode(first_noun_hand, 'loc' = 1, 'sub' = 0)) %>%
+  group_by(foregrounded, participant_audio_id) %>% 
+  summarize(mean = mean(first_noun_factor), included_trials = n())
+
+agr_s
+
+# 7 out of the 55 included participants never use the location-first form at all 
+data %>% 
+  filter(verb_type == 'critical') %>% 
+  filter(!is.na(first_noun_hand), first_noun_hand != 'DROP', first_noun_hand != 'sub*') %>% 
+  mutate(first_noun_factor = recode(first_noun_hand, 'loc' = 1, 'sub' = 0)) %>%
+  group_by(participant_audio_id) %>% 
+  summarize(mean = mean(first_noun_factor), included_trials = n()) %>%
+  filter(mean == 0)
+
+# Plot participants' location-first uses by foregrounding 
+ggplot(agr_s, aes(x = reorder(participant_audio_id, mean), y = mean, fill = foregrounded)) +
+  geom_bar(stat = 'identity') + 
+  theme (axis.text.x=element_blank()) +
+  labs(x = "Participant", 
+       y = "Percentage", 
+       title = "Percent Location-first Utterances") 
+# 
+# # add verb grouping variable
+# total_included_trials <- data %>% 
+#   filter(verb_type == 'critical') %>% 
+#   filter(!is.na(first_noun_hand), first_noun_hand != 'DROP', first_noun_hand != 'sub*') %>% 
+#   mutate(first_noun_factor = recode(first_noun_hand, 'loc' = 1, 'sub' = 0)) %>%
+#     group_by(participant_audio_id) %>% 
+#   summarize(locForms = sum(first_noun_factor), 
+#             included_trials = n())
+#   
+
+
+#Get participants with 2 + usable utterances for each verb 
+good_participants <- data %>%
+  filter(verb_type == 'critical') %>%
+  filter(!is.na(first_noun_hand), first_noun_hand != 'DROP', first_noun_hand != 'sub*') %>%
+  mutate(first_noun_factor = recode(first_noun_hand, 'loc' = 1, 'sub' = 0)) %>% 
+  group_by(participant_audio_id, verb) %>%
+  summarize(locForms = sum(first_noun_factor),
+            `# Trials` = n(),
+            propLoc = locForms/`# Trials`) %>% 
+  select(-propLoc, -locForms) %>%
+  #get rid of participants who did not produce more than 2 utterances for each verb 
+  pivot_wider(names_from = verb, values_from = `# Trials`) %>% 
+  filter(load >=2, spread >=2, stuff >=2, spray >=2) 
+
+data %>%
+  filter(participant_audio_id %in% good_participants$participant_audio_id) %>%
+  filter(verb_type == 'critical') %>%
+  filter(!is.na(first_noun_hand), first_noun_hand != 'DROP', first_noun_hand != 'sub*') %>%
+  mutate(first_noun_factor = recode(first_noun_hand, 'loc' = 1, 'sub' = 0)) %>%
+  group_by(participant_audio_id) %>% 
+  summarize(locForms = sum(first_noun_factor)) %>%
+  arrange(locForms)
+
+
+# Implicational Hierarchy, filtered for participants with 2+ utterances for each verb
+hierarchy_plot <- data %>%
+  filter(participant_audio_id %in% good_participants$participant_audio_id) %>%
+  filter(verb_type == 'critical') %>%
+  filter(!is.na(first_noun_hand), first_noun_hand != 'DROP', first_noun_hand != 'sub*') %>%
+  mutate(first_noun_factor = recode(first_noun_hand, 'loc' = 1, 'sub' = 0)) %>%
+  group_by(participant_audio_id, verb) %>%
+  summarize(locForms = sum(first_noun_factor),
+            `# Trials` = n(),
+            propLoc = locForms/`# Trials`) %>% 
+  mutate(verb = factor(verb, levels = c("spread", "load", "spray", "stuff"), labels = c("Spread", "Load", "Spray",  "Stuff"))) %>%
+  ggplot(aes(x = reorder(participant_audio_id, propLoc), y = propLoc/4, )) +
+  geom_col(aes(fill = verb)) +
+  scale_fill_manual("legend", values = c("#FEC51D","#620059", "#9d2235",  "#006a52")) + 
+  # geom_text(aes(x = participant_audio_id, y = propLoc, label = `# Trials`))
+  theme (axis.text.x=element_blank(), legend.title = element_blank()) +
+  labs(x = "Participant", 
+       y = "Prop. Loc-First") +
+  # scale_y_continuous(
+  # breaks = c(1, 2, 3, 4, 5),
+  # label = c("0.2", "0.4", "0.6", "0.8", "1")) + 
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(), 
+        legend.position = "bottom")
+
+
+hierarchy_plot
+# ggsave("Figures/implicationalHierarchy.png", height = 4)
+
+
+```
+
+
+# Priming Analyses
+```{r}
+# Check for priming effects that might explain proportion of utterances
+
+# Self-priming: Do people produce more and more of one structure over time? 
+
+# Of 55 participants, the trial index in the experiment is predictive of the 
+# proportion of location-first utterance for 4 participants
+
+# You do get a perfect fit for 1 participant who never used SUB-first at all 
+df.selfPriming <- data %>% 
+  filter(verb_type == 'critical') %>%
+  filter(!is.na(first_noun_hand)) %>% 
+  filter(first_noun_hand != 'sub*', first_noun_hand != "DROP") %>%
+  mutate(first_noun_hand = recode(first_noun_hand, 'loc'= 1, 'sub' = 0)) %>%
+  group_by(participant_audio_id) %>% 
+  nest() %>% 
+  mutate(fit = map(data, ~ lm(first_noun_hand ~ trial_index, data = .x)),
+         results = map(fit, tidy)) %>% 
+  unnest(results)
+
+df.selfPriming %>% 
+  filter(p.value <.05 & term == 'trial_index')
+
+
+   
+```
+
+```{r}
+# Check for priming by previous trials 
+getPreviousProduction <- function(itemIndex, participant){
+  previous_trial <- filter(data, 
+                           participant_audio_id == participant, 
+                           trial_index == itemIndex-2)
+  
+  if (nrow(previous_trial == 1)){
+    previous_choice<- previous_trial$first_noun_hand
+  }
+  else{
+    return(3)
+  }
+  
+  return(previous_choice)
+}
+
+
+foo <- data %>% 
+  mutate(previousTrialProduction = map2(data$trial_index, 
+                                        data$participant_audio_id, 
+                                        getPreviousProduction)) %>% 
+  mutate(previousTrialProduction = as.factor(unlist(previousTrialProduction))) %>% 
+  filter(verb %in% c('spray', 'load', 'stuff', 'spread') & 
+           first_noun_hand %in% c('loc', 'sub')) %>% 
+  mutate(first_noun_hand = recode(first_noun_hand, 'sub' =0 , 'loc' =1 ))
+
+
+
+
+fit.foo <- lm(first_noun_hand~previousTrialProduction, 
+              data = foo)
+summary(fit.foo)
+```
+
+```{r}
+# Priming by Control Verbs, which force participants to use one or the other structure
+
+getPreviousTrialType <- function(itemIndex, participant){
+  previous_trial <- filter(data, 
+                           participant_audio_id == participant, 
+                           trial_index == itemIndex-2)
+  
+  if (nrow(previous_trial == 1)){
+    previous_verb<- previous_trial$verb
+  }
+  else{
+    return(3)
+  }
+  
+  if (previous_verb == 'cover' | previous_verb == 'drench') {
+  previous_trial_type <- 1  
+  }
+  else if (previous_verb == "put" | previous_verb == "stash") {
+     previous_trial_type <- 0
+   }
+  else{
+      previous_trial_type <- 3
+    }
+  return(previous_trial_type)
+}
+
+foo <- data %>% 
+  mutate(previousTrialType = map2(data$trial_index, 
+                                  data$participant_audio_id, 
+                                  getPreviousTrialType)) %>% 
+  mutate(previousTrialType = as.factor(unlist(previousTrialType)))
+
+
+foo %>% 
+  filter(verb == 'spray' | verb == "load" | verb == "stuff" | verb == "spread") %>%
+  filter(previousTrialType == 0) %>% 
+  group_by(first_noun_hand) %>% 
+  summarize(n = n()) %>% 
+  pivot_wider(names_from = first_noun_hand, values_from = n) %>% 
+  mutate(r = loc/(sub+loc))
+
+# Don't understand why ggplot is giving this warning, but the data/plot looks right
+
+foo %>% 
+     filter(verb %in% c('spray', 'load', 'stuff', 'spread') & 
+                first_noun_hand %in% c('loc', 'sub')) %>% 
+     mutate(first_noun_hand = recode(first_noun_hand, 'sub' =0 , 'loc' =1 )) %>% 
+     group_by(verb, previousTrialType) %>% 
+     summarize(m = mean(first_noun_hand))
+
+
+foo %>% 
+  filter(verb %in% c('spray', 'load', 'stuff', 'spread') & 
+           first_noun_hand %in% c('loc', 'sub')) %>% 
+  mutate(first_noun_hand = recode(first_noun_hand, 'sub' =0 , 'loc' =1 )) %>% 
+  ggplot(aes(x = previousTrialType, 
+             y = first_noun_hand)) + 
+  stat_summary(fun = "mean") +
+  stat_summary(fun.data = "mean_cl_boot",
+               geom = "linerange",
+               size = 1.5) + 
+  scale_x_discrete(labels = c("Sub-First Control", "Loc-First Control", "Not A Control Verb\n(Filler or Critical)")) + 
+  xlab("Previous Trial") + 
+  ylab("Proportion Loc-First")
+
+
+```
+
+
+
+# Plot By Condition, By Verb
+```{r}
+# Effect of Foregrounding, Differentiate verbs
+
+agr_by_verb <- data %>% 
+  filter(verb_type == 'critical') %>% 
+  filter(first_noun_hand != 'sub*', first_noun_hand != "DROP") %>%
+  mutate(first_noun_factor = recode(first_noun_hand, 'loc' = 1, 'sub' = 0, 'sub*' = 1)) %>%
+  group_by(foregrounded, verb) %>%
+  summarize(mean = mean(first_noun_factor), low = ci.low(first_noun_factor), high = ci.high(first_noun_factor)) %>%
+  mutate(ciHigh = mean + high, ciLow = mean - low) %>% 
+  mutate(verb = recode(verb, "spray" = "Spray", "load" = "Load", "spread" = "Spread", "stuff" = "Stuff" )) %>% 
+  mutate(mean = mean, ciHigh = ciHigh, ciLow = ciLow) %>%
+  ungroup() %>%
+  mutate(verb = factor(verb, levels = c("Spread", "Load", "Spray", "Stuff")))
+
+agr_by_verb %>% 
+  select(verb, foregrounded, mean, ciHigh, ciLow) %>% 
+  arrange(verb)
+
+
+foregrounding_by_verb <- agr_by_verb %>%
+  ggplot(aes(x = foregrounded, y = mean, fill = verb)) +
+  geom_bar(stat = 'identity', color = "black", width= .75) +
+  scale_fill_manual("legend", values = c("#FEC51D","#620059", "#9d2235",  "#006a52")) +
+  geom_errorbar(aes(ymax = ciHigh, ymin = ciLow), width =.1) + 
+  facet_grid(cols = vars(verb)) + 
+  labs(x = "Foregrounded Item", 
+       y = "Prop. Loc-First") +
+  scale_x_discrete(labels= c("Loc", "Sub")) + 
+  guides(fill = "none") +
+  theme(
+  panel.grid.major.x = element_blank(),
+  panel.grid.minor.x = element_blank(),
+  strip.background = element_rect(fill="white"))
+
+foregrounding_by_verb
+
+# ggsave("Figures/proportionLocFirstUtterances.png", height = 4)
+```
+
+# Patchwork Plots (Paper, Poster)
+```{r}
+library(patchwork)
+
+overall_foregrounding_plot + foregrounding_by_verb + hierarchy_plot + 
+  plot_layout(ncol = 3, widths = c(1,2.5,3))
+
+ggsave("Figures/patchwork.png", width = 20)
+```
+
+
+```{r}
+
+## Effect of foregrounding, differentiate scenes
+data %>% 
+  filter(verb_type == 'critical') %>% 
+  filter(!is.na(first_noun_hand), first_noun_hand != 'DROP') %>% 
+  mutate(first_noun_factor = recode(first_noun_hand, 'loc' = 1, 'sub' = 0, 'sub*' = 1)) %>%
+  group_by(foregrounded, scene, verb) %>%
+  summarize(mean = mean(first_noun_factor)) %>% 
+  group_by(scene) %>% 
+  ggplot(aes(x = foregrounded, y = mean, label = scene)) +
+  geom_line(aes(group=scene)) + 
+  labs(title = "Proportion of Location-first Utterances") + 
+  labs(x = "Visually Salient Object", 
+       y = "Proportion of Location-First Utterances") +
+  scale_x_discrete(labels= c("Location", "Substance")) +
+  geom_text_repel() + 
+  # aes(color = verb, alpha = .3) + 
+  facet_grid(~verb)
+
+
+```
+
+```{r}
+#Control sentences
+
+## Read in the data, filter out filler and control trials
+controls <- read_csv("All_Transcriptions_HandEdited.csv") 
+
+agr_controls <- controls %>% 
+  filter(verb_type == 'control') %>% 
+  filter(!is.na(first_noun_hand), first_noun_hand != 'DROP') %>% 
+  mutate(first_noun_factor = recode(first_noun_hand, 'loc' = 1, 'sub' = 0, 'sub*' = 1)) %>%
+  group_by(foregrounded) %>% 
+  summarize(mean = mean(first_noun_factor), low = ci.low(first_noun_factor), high = ci.high(first_noun_factor)) %>%
+  mutate(ciHigh = mean + high, ciLow = mean - low) 
+
+
+agr_controls %>% 
+  ggplot(aes(x = foregrounded, y = mean)) +
+  geom_col(fill = "gray60", color = "black") +
+  geom_errorbar(aes(ymax = ciHigh, ymin = ciLow), width =.1) + 
+  labs(title = "Proportion of Location-first Utterances") + 
+  labs(x = "Visually Salient Object", 
+       y = "Proportion of Location-First Utterances In Control Sentences") +
+  scale_x_discrete(labels= c("Location", "Substance")) 
+
+```
+
+```{r}
+controls_by_verb <- controls %>% 
+  filter(verb_type == 'control') %>% 
+  filter(!is.na(first_noun_hand), first_noun_hand != 'DROP') %>% 
+  mutate(first_noun_factor = recode(first_noun_hand, 'loc' = 1, 'sub' = 0, 'sub*' = 1)) %>%
+  group_by(foregrounded, verb) %>%
+  summarize(mean = mean(first_noun_factor), low = ci.low(first_noun_factor), high = ci.high(first_noun_factor)) %>%
+  mutate(ciHigh = mean + high, ciLow = mean - low) 
+
+controls_by_verb %>% 
+  ggplot(aes(x = foregrounded, y = mean)) +
+  geom_bar(stat = 'identity', fill = "gray60", color = "black") +
+  geom_errorbar(aes(ymax = ciHigh, ymin = ciLow), width =.1) + 
+  facet_wrap(~verb) + 
+  labs(title = "Proportion of Location-first Utterances") + 
+  labs(x = "Visually Salient Object", 
+       y = "Proportion of Location-First Utterances in Control Sentences") +
+  scale_x_discrete(labels= c("Location", "Substance"))
+```
+
+```{r}
+fillers <- read_csv("All_Transcriptions_HandEdited.csv") 
+fillers <- fillers %>% filter(verb_type == 'filler')
+## Because the filler verbs are datives, there's no coherent notion of locatin
+## or Substance, they were just arbitrarily assigned as one or the other. 
+## To plot this data, it makes more sense to plot "First-mentions of foregrounded obj"
+
+agr_filler <- fillers %>% 
+  filter(!is.na(first_noun_automatic)) %>% 
+  mutate(foregroundedIsFirst = (foregrounded == first_noun_automatic)) %>%
+  mutate(foregroundedIsFirst_factor = as.integer(foregroundedIsFirst)) %>% 
+  group_by(verb) %>%
+  summarize(mean = mean(foregroundedIsFirst_factor),low = ci.low(foregroundedIsFirst_factor), high = ci.high(foregroundedIsFirst_factor)) %>%
+  mutate(ciHigh = mean + high, ciLow = mean - low) 
+
+agr_filler
+
+agr_filler %>%
+  ggplot(aes(x = verb, y = mean)) +
+  geom_col(fill = "gray60", color = "black") +
+  geom_errorbar(aes(ymax = ciHigh, ymin = ciLow), width =.1) +
+  labs(title = "Proportion of Foregrounded-first Utterances In Filler Sentences") +
+  labs(x = "Visually Salient Object",
+       y = "Proportion of Foregrounded-first Utterances") 
+```
+
+# Norming Data
+```{r}
+library(here)
+raw_norming_data <- read_csv(here("data", "02_normingAvailabilityStims", "normingAvailabilityStims-trials.csv"))
+
+norming_data <- raw_norming_data %>% 
+  select(-internal_node_id, -slider_start, -error, -trial_type, -time_elapsed, -proliferate.condition) %>%
+  filter((workerid != 385) & (workerid != 379)) %>% # Non-native self-reported, total 60 Native Eng
+  mutate(verbType = case_when(
+    verb == "spray" | verb == "load" | verb == "stuff" | verb == "spread" ~ "critical", .default = "control")) %>% 
+  mutate(scene = recode(scene, "buttertoast" = "butter toast", "cashenvelope" = "cash envelope", "cheesemushroom" = "cheese mushroom", "frostingcupcake" = "frosting cupcake", "fruitplane" = "fruit plane", "haywagon" = "hay wagon", "honeypastry" = "honey pastry", "ketchuphotdog" = "ketchup hotdog", "paintfence" = "paint fence", "papershoe" = "paper shoe", "poisonbush" = "poison bush", "ricebellpepper" = "rice pepper", "soaptable" = "soap table", "trashtrain" = "trash train", "watercar" = "water car", "woodtruck" = "wood truck")) %>%
+  mutate(verb = recode(verb, "spray" = "Spray", "load" = "Load", "spread" = "Spread", "stuff" = "Stuff" ))
+
+
+norming_data %>% 
+  filter(verbType == 'critical') %>%
+  group_by(verb) %>%
+  summarize(mean = mean(response), low = ci.low(response), high = ci.high(response)) %>%
+  mutate(ciHigh = mean + high, ciLow = mean - low) %>%
+  ggplot(aes(x = verb, y= mean)) +
+  geom_col(fill = "#006a5241", color = "#006a52") +
+  ylim(c(0,100)) + 
+  geom_errorbar(aes(ymax = ciHigh, ymin = ciLow), width =.1, color = "#006a52") +
+  labs(title = "Mean Affectedness Rating of Location Noun by Verb") +
+  labs(x = "Verb",
+       y = "Mean Affectedness Judgement")
+  
+
+affectedness_overall <- norming_data %>% 
+  filter(verbType == 'critical') %>%
+  group_by(scene, verb) %>%
+  summarize(mean = mean(response), low = ci.low(response), high = ci.high(response)) %>%
+  mutate(ciHigh = mean + high, ciLow = mean - low) %>%
+  ggplot(aes(x = reorder(scene, mean), y= mean)) +
+  geom_col(fill = "#016895", color = "black") +
+  ylim(c(0,100)) + 
+  geom_errorbar(aes(ymax = ciHigh, ymin = ciLow), width =.1) +
+  scale_x_discrete(labels = label_wrap(4)) + 
+  labs(x = "Item",
+       y = "Mean Affectedness Judgement") +
+  geom_text(aes(label=round(mean, 2)), vjust=-1.7) + 
+  facet_wrap(~verb, scale="free") + 
+  theme(text = element_text(size = 16), 
+        plot.title = element_text(size = 18), 
+        axis.text.x = element_text(size = 12))  
+
+ggsave("figures/norming_meanAffectednessRatings.pdf", width = 7, height = 6)
+
+affectedness_by_foregrounding <- norming_data %>% 
+  filter(verbType == 'critical') %>%
+  mutate(foregrounded = recode(foregrounded, 'loc' = "Location", 'sub' = "Substance")) %>% 
+  group_by(foregrounded) %>%
+  summarize(mean = mean(response), low = ci.low(response), high = ci.high(response)) %>%
+  mutate(ciHigh = mean + high, ciLow = mean - low) %>%
+  ggplot(aes(x = foregrounded, y= mean)) +
+  geom_col(fill = "#016895", color = "black") +
+  geom_text(aes(label=round(mean, 2)), vjust=-1.7) + 
+  ylim(c(0,100)) +
+  geom_errorbar(aes(ymax = ciHigh, ymin = ciLow), width =.1)  +
+  labs(x = "Foregrounded Noun")+
+    theme(text = element_text(size = 16), 
+        plot.title = element_text(size = 18), 
+        axis.text.x = element_text(size = 12), 
+        axis.title.y =  element_blank())  
+
+library(patchwork)
+affectedness_by_foregrounding + affectedness_overall + 
+  plot_layout(widths = c(1, 2)) + 
+  plot_annotation(tag_levels = "A")
+
+ggsave("figures/norming_all.pdf", width = 13, height = 6)
+
+
+norming_data %>% 
+  filter(verbType == 'critical') %>%
+  unite("Scene", verb, scene, sep = " ", remove = FALSE) %>% 
+  group_by(foregrounded, Scene) %>% 
+  summarize(mean = mean(response), low = ci.low(response), high = ci.high(response)) %>%
+  mutate(ciHigh = mean + high, ciLow = mean - low) %>%
+  ggplot(aes(x = foregrounded, y= mean)) +
+  geom_col(fill = "#006a52", color = "black") +
+  ylim(c(0,100)) +
+  geom_errorbar(aes(ymax = ciHigh, ymin = ciLow), width =.1)  +
+  labs(title = "Mean Affectedness Rating of Location Noun by Foregrounding Condition") +
+  labs(x = "Foregrounded Noun",
+       y = "Mean Affectedness Judgement") +
+  facet_wrap(~Scene, scale="free")
+
+
+norming_data %>% 
+  filter(verbType == 'critical') %>%
+  unite("Scene", verb, scene, sep = " ", remove = FALSE) %>% 
+  group_by(mirroringCondition, verb) %>% 
+  summarize(mean = mean(response), low = ci.low(response), high = ci.high(response)) %>%
+  mutate(ciHigh = mean + high, ciLow = mean - low) %>%
+  ggplot(aes(x = mirroringCondition, y= mean)) +
+  ylim(0,100) + 
+  geom_col(fill = "#006a52", color = "black") +
+  geom_errorbar(aes(ymax = ciHigh, ymin = ciLow), width =.1)  +
+  labs(title = "Mean Affectedness Rating of Location Noun by Mirroring Condition") +
+  labs(x = "Mirroring Condition",
+       y = "Mean Affectedness Judgement") + 
+  facet_wrap(~verb)
+
+
+
+Get "high affected" and "low affected" items 
+affectedness_differentials <- norming_data %>%
+  filter(verbType == 'critical') %>% 
+  group_by(verb, verbType, scene) %>% 
+  summarise(meanDiff = mean(response)-mean(norming_data$response)) %>% 
+  mutate(highAffected = meanDiff > 0) %>%
+  select(-meanDiff)
+
+agr_by_scene <- data %>% 
+  filter(verb_type == 'critical') %>% 
+  filter(!is.na(first_noun_hand), first_noun_hand != 'DROP') %>% 
+  mutate(first_noun_factor = recode(first_noun_hand, 'loc' = 1, 'sub' = 0, 'sub*' = 1)) %>%
+  group_by(foregrounded, verb, scene) %>%
+  summarize(mean = mean(first_noun_factor), low = ci.low(first_noun_factor), high = ci.high(first_noun_factor)) %>%
+  mutate(ciHigh = mean + high, ciLow = mean - low) %>% 
+  mutate(verb = recode(verb, "spray" = "Spray", "load" = "Load", "spread" = "Spread", "stuff" = "Stuff" )) %>% 
+  mutate(mean = mean*100, ciHigh = ciHigh*100, ciLow = ciLow*100)
+
+
+full_join(affectedness_differentials, agr_by_scene) %>% 
+ggplot(aes(x = foregrounded, y = mean)) +
+#   geom_bar(stat = 'identity', fill = "#006a52", color = "black", width= .75) +
+#   geom_errorbar(aes(ymax = ciHigh, ymin = ciLow), width =.1) + 
+#   facet_wrap(~verb, scene) + 
+#   labs(title = "Percentage of Location-first Utterances") + 
+#   labs(x = "Foregrounded Object", 
+#        y = "Percentage") +
+#   scale_x_discrete(labels= c("Location", "Substance")) +
+#   theme(text = element_text(size = 18), plot.title = element_text(size = 18)) 
+```
+
+
+# Regression Modelling 
+```{r}
+suppressMessages(library(lme4))
+library(here)
+nd <- read_csv(here("data", "02_normingAvailabilityStims", "normingAvailabilityStims-trials.csv")) 
+norming_data <- nd %>% 
+  mutate(foregrounded = fct(foregrounded)) %>% 
+  mutate(scene = recode(scene, 'cheesemushroom' = 'cheesemushrooms')) %>%
+  select(verb, scene, foregrounded, mirroringCondition, response) %>% 
+  group_by(scene, foregrounded, mirroringCondition) %>% 
+  summarize(affectedness = mean(response))
+
+data <- read_csv("All_Transcriptions_HandEdited.csv") %>%
+  filter(participant_audio_id != '6203f830-9f85-45f1-aa3f-f961b6ad4b94') %>% #No Audio
+  filter(participant_audio_id != 'bd0ad0a8-5802-4bc1-afda-2451c0ea7955') %>% #No Audio
+  filter(participant_audio_id != 'e7458f96-ff66-4873-8220-595ccd61e540') %>% #Self Report NNS
+  filter(participant_audio_id != 'e89a3ce0-bb45-4cdd-8333-c0335d1f5a94') %>% #Self Report NNS
+  filter(participant_audio_id != '4f40a7e3-2764-46bf-8a5f-3e8682eff108') #Unsure NNS
+
+agr <- data %>% 
+  filter(verb_type == 'critical') %>% 
+  filter(!is.na(first_noun_hand), first_noun_hand != 'DROP') %>% 
+  filter(first_noun_hand != 'sub*') %>%
+  mutate(first_noun_factor = recode(first_noun_hand, 'loc' = 1, 'sub' = 0)) %>%
+  mutate(foregrounded = fct(foregrounded, levels = c("sub", "loc"))) %>% 
+  mutate(first_noun = fct(first_noun_hand, levels = c("sub","loc"))) %>%
+  mutate(mirroringCondition = as.integer(as.logical(mirroring_condition))) %>% 
+  select(-time_elapsed)
+  
+surp_data <- read_csv(here("data", "02_availabilityInProduction", "surprisals.csv")) %>%
+  mutate(meanSurprisal = mean(surprisal)) %>% 
+  mutate(relativeSurprisal = meanSurprisal-surprisal) %>% 
+  select(-meanSurprisal)
+
+d <- left_join(agr, surp_data)
+
+d <- left_join(d, norming_data)
+# Center predictors: Last step, after the set of data points is defined 
+model_data <- d %>%
+  mutate(c_foregrounded = as.numeric(foregrounded)-mean(as.numeric(foregrounded))) %>%
+  mutate(c_affectedness = affectedness-mean(affectedness)) %>% 
+  mutate(c_mirroring = mirroringCondition-mean(mirroringCondition)) %>%
+  mutate(c_surprisal = surprisal-mean(surprisal))
+
+
+contrasts(agr$first_noun)
+contrasts(agr$foregrounded)
+# table(agr$participant_audio_id)
+# table(agr$scene)
+# table(agr$foregrounded, agr$participant_audio_id)
+# table(agr$foregrounded, agr$scene)
+
+
+# First_noun from fixed effects foregrounding + affectedness
+# By-participant random slopes and intercepts (|| participantid)
+# By-item (? scene?) random slopes and intercepts (|| scene)
+# No interactions of foregrounding and affectedness
+# (Intercept)    -2.02019    0.50633  -3.990  6.61e-05 ***
+# c_foregrounded  0.88011    0.33995   2.589  0.00963 ** 
+# c_affectedness  0.02223    0.03055   0.728  0.46678    
+
+fit.foregroundAffectedness = glmer(first_noun ~ c_foregrounded+ c_affectedness +
+           (1 + c_foregrounded | participant_audio_id)+  
+            (1+ c_affectedness | participant_audio_id)+
+          (1+ c_affectedness | scene)+
+          (1+ c_foregrounded | scene),
+         data = d, family = "binomial",)
+
+summary(fit.foregroundAffectedness)
+
+
+# First_noun from fixed effects foregrounding + affectedness + Mirroring
+# By-participant random slopes and intercepts (||)
+# No interactions of foregrounding and affectedness
+fit.foregroundAffectednessMirroring = glmer(first_noun ~ c_foregrounded+ c_affectedness + c_mirroring + 
+           (1 + c_foregrounded || participant_audio_id)+  
+            (1+ c_affectedness || participant_audio_id)+
+            (1+ c_mirroring || participant_audio_id)+
+          (1+ c_affectedness || scene)+
+          (1+ c_foregrounded || scene)+
+          (1+ c_mirroring || scene),
+         data = d, family = "binomial",)
+summary(fit.foregroundAffectednessMirroring)
+
+# First_noun from fixed effects foregrounding + affectedness + Mirroring + surprisal 
+# By-participant random slopes and intercepts (||)
+# No interactions of foregrounding and affectedness
+# WARNING FAILURE TO CONVERGE
+fit.all = glmer(first_noun ~ c_foregrounded+ c_affectedness + c_mirroring + c_surprisal + 
+           (1 + c_foregrounded || participant_audio_id)+  
+            (1+ c_affectedness || participant_audio_id)+
+            (1+ c_mirroring || participant_audio_id)+
+            (1+ surprisal || participant_audio_id)+
+          (1+ c_affectedness || scene)+
+          (1+ c_foregrounded || scene)+
+          (1+ c_surprisal || scene)+
+          (1+ c_mirroring || scene),
+         data = d, family = "binomial",)
+summary(fit.all)
+
+```
+```{r}
+
+suppressMessages(library(lme4))
+# First_noun from fixed effects foregrounding + affectedness + Mirroring + surprisal 
+# By-participant random slopes and intercepts (||)
+# Interaction between foregrounded and affectedness
+m = glmer(first_noun ~ c_foregrounded*c_affectedness + c_mirroring + c_surprisal + 
+           (1 + c_foregrounded || participant_audio_id)+  
+            (1+ c_affectedness || participant_audio_id)+
+            (1+ c_mirroring || participant_audio_id)+
+            (1+ surprisal || participant_audio_id)+
+          (1+ c_affectedness || scene)+
+          (1+ c_foregrounded || scene)+
+          (1+ c_surprisal || scene)+
+          (1+ c_mirroring || scene),
+         data = d, family = "binomial",)
+summary(m)
+
+m = glmer(first_noun ~ c_foregrounded*c_affectedness +
+           (1 + c_foregrounded || participant_audio_id)+  
+            (1+ c_affectedness || participant_audio_id)+
+          (1+ c_affectedness || scene)+
+          (1+ c_foregrounded || scene),
+         data = d, family = "binomial",)
+summary(m)
+
+
+m = glmer(first_noun ~ c_foregrounded*c_affectedness + c_mirroring + c_surprisal + 
+           (1 | participant_audio_id)+  
+          (1 | scene), 
+         data = d, family = "binomial",)
+summary(m)
+```
+
+
+```{r}
+d %>% 
+  ggplot(aes(x = surprisal)) +
+  geom_histogram()
+library(languageR)
+pairscor.fnc(d[,c("foregrounded","affectedness","mirroringCondition","surprisal","first_noun")])
+contrasts(d$first_noun)
+
+```
